@@ -31,20 +31,18 @@
 }
 
 /*
-  Текстовый элемент diff-слоя.
+  Элемент подсветки diff-слоя.
   Размещается поверх соответствующего слова на canvas согласно координатам
   из бэкенда (PyMuPDF get_text("words")).
+  Текстового содержимого не содержит — только цветной фон подсветки для
+  операций DELETE (красный) и INSERT (зелёный). EQUAL не рендерится.
 */
 .diff-word {
   position: absolute;
   white-space: pre-wrap;
   overflow: visible;
   z-index: 10;
-  line-height: 1.2;
-  font-size: 11px;
-  font-family: "Fira Code", ui-monospace, SFMono-Regular, Menlo, monospace;
   transform-origin: left top;
-  /* Чтобы текст не выбиралсЯ случайно при скроллинге */
   user-select: none;
 }
 

@@ -300,13 +300,15 @@ function buildDiffWordsHtml(pageNum, panelKey, startBlockIdx = 0) {
 
   let html = "";
   for (const w of words) {
-    const cls = `diff-word ${w.op === "DELETE" ? "delete" : w.op === "INSERT" ? "insert" : "equal"}`;
+    // EQUAL не рендерится на diff-слое — текст уже нарисован на canvas подложкой pdf.js.
+    if (w.op === "EQUAL") continue;
+    const cls = `diff-word ${w.op === "DELETE" ? "delete" : "insert"}`;
     const left = Math.round(w.x0 * scaleX);
     const top = Math.round(w.y0 * scaleY);
     const width = Math.round((w.x1 - w.x0) * scaleX);
     const height = Math.round((w.y1 - w.y0) * scaleY);
-    const escaped = escapeHtml(w.word);
-    html += `<span class="${cls}" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px" title="${escapeHtml(w.op)}">${escaped}</span>`;
+    // Пустой бокс подсветки без текстового contenuto — дублирование букв поверх canvas убирается.
+    html += `<div class="${cls}" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px" title="${escapeHtml(w.op)}"></div>`;
   }
   return { html, blockIdx: endBlockIdx };
 }
