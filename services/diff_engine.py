@@ -40,6 +40,8 @@ class DiffBlock:
     op: str  # "EQUAL" | "INSERT" | "DELETE"
     text: str
     html: str  # HTML-разметка для вставки в соответствующую панель
+    char_start: int  # Абсолютное смещение от начала текста этой панели
+    char_end: int  # Абсолютное смещение от начала текста этой панели (конец)
 
 
 def _escape(text: str) -> str:
@@ -96,26 +98,63 @@ def compute_diff(text_a: str, text_b: str) -> dict:
     inserted_chars = 0
     deleted_chars = 0
 
+    # Сквозные символьные смещения для каждой панели (независимые).
+    left_char_offset = 0
+    right_char_offset = 0
+
     for op_code, text in diffs:
+        text_len = len(text)
         if op_code == DIFF_EQUAL:
             # Неизмененный текст — присутствует в обеих панелях без подсветки.
             escaped = _escape(text)
-            left_blocks.append(DiffBlock(op="EQUAL", text=text, html=escaped))
-            right_blocks.append(DiffBlock(op="EQUAL", text=text, html=escaped))
-            equal_chars += len(text)
+            left_blocks.append(
+                DiffBlock(
+                    op="EQUAL",
+                    text=text,
+                    html=escaped,
+                    char_start=left_char_offset,
+                    char_end=left_char_offset + text_len,
+                )
+            )
+            right_blocks.append(
+                DiffBlock(
+                    op="EQUAL",
+                    text=text,
+                    html=escaped,
+                    char_start=right_char_offset,
+                    char_end=right_char_offset + text_len,
+                )
+            )
+            equal_chars += text_len
+            left_char_offset += text_len
+            right_char_offset += text_len
         elif op_code == DIFF_DELETE:
             # Удаленный текст — только левая панель, красная подсветка + зачеркивание.
             left_blocks.append(
-                DiffBlock(op="DELETE", text=text, html=_wrap_deleted(text))
+                DiffBlock(
+                    op="DELETE",
+                    text=text,
+                    html=_wrap_deleted(text),
+                    char_start=left_char_offset,
+                    char_end=left_char_offset + text_len,
+                )
             )
-            deleted_chars += len(text)
+            deleted_chars += text_len
+            left_char_offset += text_len
             # Правая панель: игнорируем.
         elif op_code == DIFF_INSERT:
             # Добавленный текст — только правая панель, зеленая подсветка.
             right_blocks.append(
-                DiffBlock(op="INSERT", text=text, html=_wrap_inserted(text))
+                DiffBlock(
+                    op="INSERT",
+                    text=text,
+                    html=_wrap_inserted(text),
+                    char_start=right_char_offset,
+                    char_end=right_char_offset + text_len,
+                )
             )
-            inserted_chars += len(text)
+            inserted_chars += text_len
+            right_char_offset += text_len
             # Левая панель: игнорируем.
 
     left_html = "".join(block.html for block in left_blocks)

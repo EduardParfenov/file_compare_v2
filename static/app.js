@@ -35,7 +35,7 @@ const state = {
 
 // -------------------- Инициализация --------------------
 
-function initApp() {
+export function initApp() {
   const fileA = document.getElementById("fileA");
   const fileB = document.getElementById("fileB");
   const btnCompare = document.getElementById("btnCompare");
@@ -83,7 +83,7 @@ async function comparePdfs(fileA, fileB) {
   formData.append("file_b", fileB);
 
   try {
-    btnCompare.disabled = true;
+    document.getElementById("btnCompare").disabled = true;
     statusBar.textContent = "Сравнение документов...";
 
     const response = await fetch(`${API_BASE}/api/v1/compare`, {
@@ -113,6 +113,9 @@ async function comparePdfs(fileA, fileB) {
     applyDiffToPanel("A");
     applyDiffToPanel("B");
 
+    // Вставляем спейсеры для синхронизации скроллинга противоположных окон
+    insertDiffSpacers();
+
     // Активируем ИИ-кнопки
     document.getElementById("btnAiAnalyze").disabled = false;
     document.getElementById("btnAiPageReport").disabled = false;
@@ -125,7 +128,7 @@ async function comparePdfs(fileA, fileB) {
     alert("Ошибка при сравнении: " + err.message);
     statusBar.textContent = "Ошибка при сравнении документов.";
   } finally {
-    btnCompare.disabled = !(fileA.files.length && fileB.files.length);
+    document.getElementById("btnCompare").disabled = !(document.getElementById("fileA").files.length && document.getElementById("fileB").files.length);
   }
 }
 
@@ -193,86 +196,107 @@ async function renderPage(pdfDoc, pageNum, container, panelKey, renderedMap) {
 // -------------------- Нанесение diff на панель --------------------
 
 /**
- * Вычислить символ-смещения каждого слова в тексте страницы,
- * чтобы сопоставить слова с координатами и операциями diff.
- */
-function computeWordOffsets(pageText, words) {
-  let offset = 0;
-  for (const w of words) {
-    const idx = pageText.indexOf(w.word, offset);
-    if (idx === -1) {
-      // слово не найдено — aproximативное смещение
-      w.start = offset;
-      w.end = offset + w.word.length;
-      offset = w.end;
-    } else {
-      w.start = idx;
-      w.end = idx + w.word.length;
-      offset = w.end;
-    }
-  }
-}
-
-/**
  * Сопоставить каждое слово с операцией diff (EQUAL/DELETE/INSERT),
- * пройдя по блокам diff в порядке следования.
+ * используя сквозные символьные индексы слов (global_char_start /
+ * global_char_end) и сквозные символьные индексы блоков diff
+ * (char_start / char_end).
+ *
+ * Слова на странице и блоки diff идут по возрастания своих start-индексов,
+ * поэтому один проход с двумя указателями достаточно. Указатель блока
+ * только двигается вперёд — без сброса на каждой странице.
+ *
+ * Параметр startBlockIdx позволяет переносить позицию итератора между
+ * страницами: вместо сброса в 0 в начале каждой страницы мы продолжаем
+ * с того же места в глобальном массиве блоков diffResult.
+ *
+ * Блоки diff (left_panel.blocks / right_panel.blocks) и слова имеют
+ * согласованные системы координат: char_start/char_end блока измеряются
+ * от начала текста панели, global_char_start/global_char_end слова — от
+ * начала того же документа. Поэтому прямое сравнение диапазонов корректно.
+ *
+ * Возвращает обновлённое значение blockIdx для передачи на следующую страницу.
+ *
+ * @param {Array} words - слова страницы (с полями global_char_start, global_char_end, word)
+ * @param {Array} blocks - блоки diff панели (с полями char_start, char_end, op)
+ * @param {number} startBlockIdx - стартовый индекс блока (сквозной итератор)
+ * @returns {number} обновлённый blockIdx
  */
-function mapWordsToOps(words, blocks) {
-  let blockIdx = 0;
-  let blockPos = 0; // позиция внутри текущего блока (в символах)
+function mapWordsToOps(words, blocks, startBlockIdx = 0) {
+  let blockIdx = startBlockIdx;
+
   for (const w of words) {
-    const wordLen = w.word.length;
+    const wordGlobalStart = w.global_char_start;
+    const wordGlobalEnd = w.global_char_end;
     let wordOp = "EQUAL";
-    let consumed = 0;
 
-    while (consumed < wordLen && blockIdx < blocks.length) {
-      const block = blocks[blockIdx];
-      const blockText = block.text;
-      const remainingInBlock = blockText.length - blockPos;
-      const need = wordLen - consumed;
-      const take = Math.min(remainingInBlock, need);
+    // Пропускаем блоки, которые заканчиваются до начала слова.
+    while (
+      blockIdx < blocks.length &&
+      blocks[blockIdx].char_end <= wordGlobalStart
+    ) {
+      blockIdx++;
+    }
 
-      // Операция блока применяется к символам слова в этом диапазоне.
-      // Для слова берем операцию первого покрывающего его блока (приоритет DELETE/INSERT над EQUAL).
+    // Проверяем все блоки, которые пересекаются с диапазоном слова.
+    // Приоритет отдаём не-EQUAL операциям (DELETE/INSERT над EQUAL).
+    let probeIdx = blockIdx;
+    while (
+      probeIdx < blocks.length &&
+      blocks[probeIdx].char_start < wordGlobalEnd
+    ) {
+      const block = blocks[probeIdx];
       if (block.op !== "EQUAL") {
         wordOp = block.op;
       }
-
-      blockPos += take;
-      consumed += take;
-
-      if (blockPos >= blockText.length) {
-        blockIdx++;
-        blockPos = 0;
-      }
+      probeIdx++;
     }
+
     w.op = wordOp;
   }
+
+  return blockIdx;
 }
 
 /**
  * Построить HTML-размещение слов на diff-слое для одной страницы одной панели.
+ *
+ * blockIdx — сквозной итератор по глобальному массиву блоков diffResult.
+ * Он передаётся из applyDiffToPanel и возвращается обновлённым, чтобы
+ * не сбрасываться в 0 на каждой странице.
+ *
+ * Генерация HTML сохраняет CSS-классы .diff-word.delete / .diff-word.insert /
+ * .diff-word.equal, чтобы insertDiffSpacers мог находить селекторы
+ * `.diff-word.delete` и `.diff-word.insert`, а текст EQUAL оставался
+ * видимым (color: #111827 через .diff-word.equal).
+ *
+ * @param {number} pageNum - номер страницы (1-based)
+ * @param {string} panelKey - "A" или "B"
+ * @param {number} startBlockIdx - стартовый индекс блока (сквозной итератор)
+ * @returns {{html: string, blockIdx: number}} HTML-разметка и обновлённый blockIdx
  */
-function buildDiffWordsHtml(pageNum, panelKey) {
+function buildDiffWordsHtml(pageNum, panelKey, startBlockIdx = 0) {
   const coords = panelKey === "A" ? state.coordsLeft : state.coordsRight;
   const blocks = panelKey === "A"
     ? state.diffResult.left_panel.blocks
     : state.diffResult.right_panel.blocks;
 
   const pageInfo = coords.pages.find((p) => p.page_number === pageNum);
-  if (!pageInfo) return "";
+  if (!pageInfo) return { html: "", blockIdx: startBlockIdx };
 
-  const pageText = pageInfo.text;
   const words = pageInfo.words.slice(); // копия, чтобы не мутировать исходное
-  computeWordOffsets(pageText, words);
-  mapWordsToOps(words, blocks);
+  // computeWordOffsets больше не нужен: глобальные индексы уже есть в словах
+  // из ответа бэкенда (global_char_start / global_char_end).
+  const endBlockIdx = mapWordsToOps(words, blocks, startBlockIdx);
 
   const vp = state.renderedPagesA.get(pageNum) ||
              state.renderedPagesB.get(pageNum);
-  if (!vp) return "";
+  if (!vp) return { html: "", blockIdx: endBlockIdx };
 
-  const scaleX = vp.viewport.width / 1; // scale=1 => 1:1 пойнт→пиксель
-  const scaleY = vp.viewport.height / 1;
+  // Масштаб координат слов: 1 PDF-пойнт = 1 пиксель canvas при state.scale=1.
+  // vp.viewport.width / 1 даёт ширину всей страницы в пунктах, а не коэффициент
+  // масштаба, что переносит текст за пределы экрана.
+  const scaleX = state.scale;
+  const scaleY = state.scale;
 
   let html = "";
   for (const w of words) {
@@ -284,7 +308,7 @@ function buildDiffWordsHtml(pageNum, panelKey) {
     const escaped = escapeHtml(w.word);
     html += `<span class="${cls}" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px" title="${escapeHtml(w.op)}">${escaped}</span>`;
   }
-  return html;
+  return { html, blockIdx: endBlockIdx };
 }
 
 function escapeHtml(text) {
@@ -300,12 +324,122 @@ function applyDiffToPanel(panelKey) {
   const renderedMap = panelKey === "A" ? state.renderedPagesA : state.renderedPagesB;
   const container = document.getElementById(`canvasContainer${panelKey}`);
 
+  // Сквозной итератор по глобальному массиву блоков diffResult.
+  // Переносится между страницами — не сбрасывается в 0 в начале каждой.
+  let blockIdx = 0;
+
   // Проходим по всем page-wrap и наполняем их diff-слои
   container.querySelectorAll(".page-wrap").forEach((pageWrap) => {
     const pageNum = parseInt(pageWrap.dataset.pageNum, 10);
     const diffLayer = pageWrap.querySelector(".diff-layer");
-    diffLayer.innerHTML = buildDiffWordsHtml(pageNum, panelKey);
+
+    const { html, blockIdx: nextBlockIdx } = buildDiffWordsHtml(
+      pageNum,
+      panelKey,
+      blockIdx
+    );
+    diffLayer.innerHTML = html;
+
+    // Переносим обновлённый blockIdx на следующую страницу
+    blockIdx = nextBlockIdx;
   });
+}
+
+/**
+ * Вставляет блоки-заглушки (spacer) в противоположное окно при крупных
+ * блоках вставки (INSERT) или удаления (DELETE), чтобы неизмененные
+ * абзацы оставались на одной горизонтальной линии.
+ *
+ * DELETE слева → спейсер справа (чтобы правое окно "замирало" на месте удаления).
+ * INSERT справа → спейсер слева (чтобы левое окно "замирало" на месте вставки).
+ */
+function insertDiffSpacers() {
+  const pageCount = Math.max(state.pageCountA, state.pageCountB);
+
+  for (let pageNum = 1; pageNum <= pageCount; pageNum++) {
+    const entryA = state.renderedPagesA.get(pageNum);
+    const entryB = state.renderedPagesB.get(pageNum);
+    if (!entryA || !entryB) continue;
+
+    const diffLayerA = entryA.pageWrap.querySelector(".diff-layer");
+    const diffLayerB = entryB.pageWrap.querySelector(".diff-layer");
+    if (!diffLayerA || !diffLayerB) continue;
+
+    // Удаляем старые спейсеры (для возможности повторного вызова)
+    diffLayerA.querySelectorAll(".diff-spacer").forEach((el) => el.remove());
+    diffLayerB.querySelectorAll(".diff-spacer").forEach((el) => el.remove());
+
+    // DELETE слева → спейсер справа
+    insertSpacersForOps(diffLayerA, diffLayerB, "delete");
+    // INSERT справа → спейсер слева
+    insertSpacersForOps(diffLayerB, diffLayerA, "insert");
+  }
+}
+
+/**
+ * Находит serie слов с заданным классом операции в sourceLayer и вставляет
+ * соответствующий спейсер в targetLayer на тех же вертикальных позициях.
+ *
+ * @param {HTMLElement} sourceLayer - diff-слой исходного окна (ищем слова операции)
+ * @param {HTMLElement} targetLayer - diff-слой противоположного окна (куда вставляем спейсер)
+ * @param {string} opClass - "delete" или "insert"
+ */
+function insertSpacersForOps(sourceLayer, targetLayer, opClass) {
+  const words = Array.from(sourceLayer.querySelectorAll(`.diff-word.${opClass}`));
+  if (words.length === 0) return;
+
+  // Группируем соседние слова в серии (runs) по вертикальной близости
+  const runs = [];
+  let currentRun = [words[0]];
+
+  for (let i = 1; i < words.length; i++) {
+    const prev = currentRun[currentRun.length - 1];
+    const curr = words[i];
+    const prevBottom = parseFloat(prev.style.top) + parseFloat(prev.style.height);
+    const currTop = parseFloat(curr.style.top);
+    // Если следующее слово идет сразу после предыдущего (зазор < 5 px) — одна серия
+    if (currTop - prevBottom < 5) {
+      currentRun.push(curr);
+    } else {
+      runs.push(currentRun);
+      currentRun = [curr];
+    }
+  }
+  runs.push(currentRun);
+
+  // Вставляем спейсер для каждой серии
+  for (const run of runs) {
+    insertSpacerForRun(targetLayer, run);
+  }
+}
+
+/**
+ * Вставляет один div.diff-spacer в targetLayer, охватывающий вертикальный
+ * диапазон заданной серии слов.
+ *
+ * @param {HTMLElement} targetLayer - diff-слой противоположного окна
+ * @param {Array<HTMLElement>} run - серия слов одной операции
+ */
+function insertSpacerForRun(targetLayer, run) {
+  if (run.length === 0) return;
+
+  const first = run[0];
+  const last = run[run.length - 1];
+  const top = parseFloat(first.style.top);
+  const bottom = parseFloat(last.style.top) + parseFloat(last.style.height);
+  const height = bottom - top;
+
+  const spacer = document.createElement("div");
+  spacer.className = "diff-spacer";
+  spacer.style.position = "absolute";
+  spacer.style.left = "0";
+  spacer.style.top = `${Math.round(top)}px`;
+  spacer.style.width = "100%";
+  spacer.style.height = `${Math.round(height)}px`;
+  spacer.style.pointerEvents = "none";
+  spacer.style.overflow = "visible";
+
+  targetLayer.appendChild(spacer);
 }
 
 // -------------------- Синхронный скроллинг (lock-step) --------------------
@@ -315,14 +449,47 @@ function syncScroll(sourcePanel, targetPanel, sourceKey) {
   state.isScrolling = true;
 
   try {
-    const sourceMax = sourcePanel.scrollHeight - sourcePanel.clientHeight;
-    const targetMax = targetPanel.scrollHeight - targetPanel.clientHeight;
-    if (sourceMax <= 0 || targetMax <= 0) return;
+    const targetKey = sourceKey === "A" ? "B" : "A";
+    const sourceContainer = document.getElementById(
+      `canvasContainer${sourceKey}`
+    );
+    const targetContainer = document.getElementById(
+      `canvasContainer${targetKey}`
+    );
 
-    const ratio = sourcePanel.scrollTop / sourceMax;
-    const targetTop = ratio * targetMax;
+    const pageWraps = Array.from(
+      sourceContainer.querySelectorAll(".page-wrap")
+    );
+    const panelRect = sourcePanel.getBoundingClientRect();
+    const absoluteScrollTop = sourcePanel.scrollTop + panelRect.top;
 
-    targetPanel.scrollTop = targetTop;
+    // Находим страницу, которая сейчас находится в верхней части области просмотра исходной панели.
+    // Якорь — страница (блок EQUAL), а не процент от общей высоты прокрутки.
+    let currentPage = null;
+    for (const pw of pageWraps) {
+      const pwTop = pw.offsetTop;
+      const pwBottom = pwTop + pw.offsetHeight;
+      if (pwTop <= absoluteScrollTop && pwBottom > absoluteScrollTop) {
+        currentPage = pw;
+        break;
+      }
+    }
+
+    if (!currentPage) return;
+
+    const pageNum = currentPage.dataset.pageNum;
+    const relativeScroll = absoluteScrollTop - currentPage.offsetTop;
+
+    // Находим соответствующую страницу в целевой панели и прокручиваем её
+    // к тому же относительному положению внутри страницы.
+    const targetPage = targetContainer.querySelector(
+      `.page-wrap[data-page-num="${pageNum}"]`
+    );
+    if (!targetPage) return;
+
+    const targetPanelRect = targetPanel.getBoundingClientRect();
+    targetPanel.scrollTop =
+      targetPage.offsetTop - targetPanelRect.top + relativeScroll;
   } finally {
     state.isScrolling = false;
   }
@@ -513,5 +680,3 @@ function nearestVisiblePage(panelKey) {
   }
   return nearest;
 }
-
-initApp();
