@@ -197,19 +197,21 @@ async function renderPage(pdfDoc, pageNum, container, panelKey, renderedMap) {
 
 /**
  * Сопоставить каждое слово с операцией diff (EQUAL/DELETE/INSERT),
- * используя глобальные символьные индексы слов (global_char_start /
- * global_char_end) и глобальные позиции блоков diff.
+ * используя сквозные символьные индексы слов (global_char_start /
+ * global_char_end) и сквозные символьные индексы блоков diff
+ * (char_start / char_end).
  *
- * Устраняет баг сброса blockIdx = 0 на каждой странице: слова
- * сопоставляются сквозь все страницы документа, а не только на текущей.
+ * Слова на странице и блоки diff идут по возрастания своих start-индексов,
+ * поэтому один проход с двумя указателями достаточно. Указатель блока
+ * только двигается вперёд — без сброса на каждой странице.
  *
- * Блоки diff (left_panel.blocks / right_panel.blocks) идут в порядке
- * документа. Слова на странице тоже идут по возрастанию global_char_start,
- * поэтому один проход с двумя указателями достаточно.
+ * Блоки diff (left_panel.blocks / right_panel.blocks) и слова имеют
+ * согласованные системы координат: char_start/char_end блока измеряются
+ * от начала текста панели, global_char_start/global_char_end слова — от
+ * начала того же документа. Поэтому прямое сравнение диапазонов корректно.
  */
 function mapWordsToOps(words, blocks) {
   let blockIdx = 0;
-  let blockGlobalStart = 0; // глобальная позиция начала текущего блока diff
 
   for (const w of words) {
     const wordGlobalStart = w.global_char_start;
@@ -217,31 +219,24 @@ function mapWordsToOps(words, blocks) {
     let wordOp = "EQUAL";
 
     // Пропускаем блоки, которые заканчиваются до начала слова.
-    // Указатель блока только двигается вперед — без сброса на каждой странице.
     while (
       blockIdx < blocks.length &&
-      blockGlobalStart + blocks[blockIdx].text.length <= wordGlobalStart
+      blocks[blockIdx].char_end <= wordGlobalStart
     ) {
-      blockGlobalStart += blocks[blockIdx].text.length;
       blockIdx++;
     }
 
-    // Если блоки закончились — слово без изменений.
-    if (blockIdx >= blocks.length) {
-      w.op = "EQUAL";
-      continue;
-    }
-
-    // Проверяем все блоки, которые покрывают хоть часть слова.
-    // Приоритет отдаем не-EQUAL операции (DELETE/INSERT над EQUAL).
+    // Проверяем все блоки, которые пересекаются с диапазоном слова.
+    // Приоритет отдаём не-EQUAL операциям (DELETE/INSERT над EQUAL).
     let probeIdx = blockIdx;
-    let probePos = blockGlobalStart;
-    while (probeIdx < blocks.length && probePos < wordGlobalEnd) {
+    while (
+      probeIdx < blocks.length &&
+      blocks[probeIdx].char_start < wordGlobalEnd
+    ) {
       const block = blocks[probeIdx];
       if (block.op !== "EQUAL") {
         wordOp = block.op;
       }
-      probePos += block.text.length;
       probeIdx++;
     }
 
@@ -412,14 +407,47 @@ function syncScroll(sourcePanel, targetPanel, sourceKey) {
   state.isScrolling = true;
 
   try {
-    const sourceMax = sourcePanel.scrollHeight - sourcePanel.clientHeight;
-    const targetMax = targetPanel.scrollHeight - targetPanel.clientHeight;
-    if (sourceMax <= 0 || targetMax <= 0) return;
+    const targetKey = sourceKey === "A" ? "B" : "A";
+    const sourceContainer = document.getElementById(
+      `canvasContainer${sourceKey}`
+    );
+    const targetContainer = document.getElementById(
+      `canvasContainer${targetKey}`
+    );
 
-    const ratio = sourcePanel.scrollTop / sourceMax;
-    const targetTop = ratio * targetMax;
+    const pageWraps = Array.from(
+      sourceContainer.querySelectorAll(".page-wrap")
+    );
+    const panelRect = sourcePanel.getBoundingClientRect();
+    const absoluteScrollTop = sourcePanel.scrollTop + panelRect.top;
 
-    targetPanel.scrollTop = targetTop;
+    // Находим страницу, которая сейчас находится в верхней части области просмотра исходной панели.
+    // Якорь — страница (блок EQUAL), а не процент от общей высоты прокрутки.
+    let currentPage = null;
+    for (const pw of pageWraps) {
+      const pwTop = pw.offsetTop;
+      const pwBottom = pwTop + pw.offsetHeight;
+      if (pwTop <= absoluteScrollTop && pwBottom > absoluteScrollTop) {
+        currentPage = pw;
+        break;
+      }
+    }
+
+    if (!currentPage) return;
+
+    const pageNum = currentPage.dataset.pageNum;
+    const relativeScroll = absoluteScrollTop - currentPage.offsetTop;
+
+    // Находим соответствующую страницу в целевой панели и прокручиваем её
+    // к тому же относительному положению внутри страницы.
+    const targetPage = targetContainer.querySelector(
+      `.page-wrap[data-page-num="${pageNum}"]`
+    );
+    if (!targetPage) return;
+
+    const targetPanelRect = targetPanel.getBoundingClientRect();
+    targetPanel.scrollTop =
+      targetPage.offsetTop - targetPanelRect.top + relativeScroll;
   } finally {
     state.isScrolling = false;
   }
