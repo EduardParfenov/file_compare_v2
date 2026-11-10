@@ -292,8 +292,11 @@ function buildDiffWordsHtml(pageNum, panelKey, startBlockIdx = 0) {
              state.renderedPagesB.get(pageNum);
   if (!vp) return { html: "", blockIdx: endBlockIdx };
 
-  const scaleX = vp.viewport.width / 1; // scale=1 => 1:1 пойнт→пиксель
-  const scaleY = vp.viewport.height / 1;
+  // Масштаб координат слов: 1 PDF-пойнт = 1 пиксель canvas при state.scale=1.
+  // vp.viewport.width / 1 даёт ширину всей страницы в пунктах, а не коэффициент
+  // масштаба, что переносит текст за пределы экрана.
+  const scaleX = state.scale;
+  const scaleY = state.scale;
 
   let html = "";
   for (const w of words) {
