@@ -254,3 +254,122 @@ def test_diff_class_equal_not_transparent():
     assert "equal" in cls
     assert "delete" not in cls
     assert "insert" not in cls
+
+
+# ---------------------------------------------------------------------------
+# Порт buildDiffWordsHtml из static/app.js (после hide-diff-text-layer)
+# ---------------------------------------------------------------------------
+
+def build_diff_words_html(words, blocks, start_block_idx=0):
+    """Порт buildDiffWordsHtml (статику app.js) на Python для тестирования.
+
+    После изменения: EQUAL не рендерится, DELETE/INSERT — пустой div без текста.
+    """
+    block_idx = start_block_idx
+    html_parts = []
+    for w in words:
+        word_global_start = w["global_char_start"]
+        word_global_end = w["global_char_end"]
+        word_op = "EQUAL"
+
+        while (
+            block_idx < len(blocks)
+            and blocks[block_idx]["char_end"] <= word_global_start
+        ):
+            block_idx += 1
+
+        probe_idx = block_idx
+        while (
+            probe_idx < len(blocks)
+            and blocks[probe_idx]["char_start"] < word_global_end
+        ):
+            block = blocks[probe_idx]
+            if block["op"] != "EQUAL":
+                word_op = block["op"]
+            probe_idx += 1
+
+        w["op"] = word_op
+
+        if w["op"] == "EQUAL":
+            continue
+
+        cls = f"diff-word {'delete' if w['op'] == 'DELETE' else 'insert'}"
+        left = round(w["x0"])
+        top = round(w["y0"])
+        width = round(w["x1"] - w["x0"])
+        height = round(w["y1"] - w["y0"])
+        html_parts.append(
+            f'<div class="{cls}" style="left:{left}px;top:{top}px;width:{width}px;height:{height}px" title="{w["op"]}"></div>'
+        )
+
+    return "".join(html_parts), block_idx
+
+
+# ---------------------------------------------------------------------------
+# Тесты hide-diff-text-layer
+# ---------------------------------------------------------------------------
+
+def test_build_diff_words_html_equal_not_rendered():
+    """EQUAL-слова не рендерятся на diff-слое (пустой HTML, текста нет)."""
+    words = [
+        {"global_char_start": 0, "global_char_end": 5, "word": "Keep", "x0": 10, "y0": 20, "x1": 40, "y1": 30},
+    ]
+    blocks = [
+        {"op": "EQUAL", "char_start": 0, "char_end": 5},
+    ]
+    html, end_idx = build_diff_words_html(words, blocks, 0)
+    assert html == ""
+    assert words[0]["op"] == "EQUAL"
+
+
+def test_build_diff_words_html_delete_rendered_without_text():
+    """DELETE-слово рендерится как div с классом delete, без текстового contenuto."""
+    words = [
+        {"global_char_start": 0, "global_char_end": 7, "word": "Removed", "x0": 10, "y0": 20, "x1": 60, "y1": 30},
+    ]
+    blocks = [
+        {"op": "DELETE", "char_start": 0, "char_end": 7},
+    ]
+    html, end_idx = build_diff_words_html(words, blocks, 0)
+    assert "diff-word delete" in html
+    assert "Removed" not in html  # текст слова не вставляется в DOM
+    assert "left:10px" in html
+    assert "top:20px" in html
+    assert "width:50px" in html
+    assert "height:10px" in html
+    assert 'title="DELETE"' in html
+
+
+def test_build_diff_words_html_insert_rendered_without_text():
+    """INSERT-слово рендерится как div с классом insert, без текстового contenuto."""
+    words = [
+        {"global_char_start": 0, "global_char_end": 6, "word": "Added", "x0": 10, "y0": 20, "x1": 50, "y1": 30},
+    ]
+    blocks = [
+        {"op": "INSERT", "char_start": 0, "char_end": 6},
+    ]
+    html, end_idx = build_diff_words_html(words, blocks, 0)
+    assert "diff-word insert" in html
+    assert "Added" not in html  # текст слова не вставляется в DOM
+    assert "left:10px" in html
+    assert 'title="INSERT"' in html
+
+
+def test_build_diff_words_html_mixed_ops_no_text():
+    """Смешанные операции: EQUAL пропускается, DELETE/INSERT рендерятся без текста."""
+    words = [
+        {"global_char_start": 0, "global_char_end": 4, "word": "Keep", "x0": 0, "y0": 0, "x1": 20, "y1": 10},
+        {"global_char_start": 5, "global_char_end": 11, "word": "Removed", "x0": 25, "y0": 0, "x1": 60, "y1": 10},
+        {"global_char_start": 12, "global_char_end": 16, "word": "Add", "x0": 65, "y0": 0, "x1": 85, "y1": 10},
+    ]
+    blocks = [
+        {"op": "EQUAL", "char_start": 0, "char_end": 4},
+        {"op": "DELETE", "char_start": 5, "char_end": 11},
+        {"op": "INSERT", "char_start": 12, "char_end": 16},
+    ]
+    html, end_idx = build_diff_words_html(words, blocks, 0)
+    assert "Keep" not in html
+    assert "Removed" not in html
+    assert "Add" not in html
+    assert "diff-word delete" in html
+    assert "diff-word insert" in html
