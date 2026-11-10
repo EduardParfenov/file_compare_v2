@@ -205,13 +205,24 @@ async function renderPage(pdfDoc, pageNum, container, panelKey, renderedMap) {
  * поэтому один проход с двумя указателями достаточно. Указатель блока
  * только двигается вперёд — без сброса на каждой странице.
  *
+ * Параметр startBlockIdx позволяет переносить позицию итератора между
+ * страницами: вместо сброса в 0 в начале каждой страницы мы продолжаем
+ * с того же места в глобальном массиве блоков diffResult.
+ *
  * Блоки diff (left_panel.blocks / right_panel.blocks) и слова имеют
  * согласованные системы координат: char_start/char_end блока измеряются
  * от начала текста панели, global_char_start/global_char_end слова — от
  * начала того же документа. Поэтому прямое сравнение диапазонов корректно.
+ *
+ * Возвращает обновлённое значение blockIdx для передачи на следующую страницу.
+ *
+ * @param {Array} words - слова страницы (с полями global_char_start, global_char_end, word)
+ * @param {Array} blocks - блоки diff панели (с полями char_start, char_end, op)
+ * @param {number} startBlockIdx - стартовый индекс блока (сквозной итератор)
+ * @returns {number} обновлённый blockIdx
  */
-function mapWordsToOps(words, blocks) {
-  let blockIdx = 0;
+function mapWordsToOps(words, blocks, startBlockIdx = 0) {
+  let blockIdx = startBlockIdx;
 
   for (const w of words) {
     const wordGlobalStart = w.global_char_start;
@@ -242,29 +253,44 @@ function mapWordsToOps(words, blocks) {
 
     w.op = wordOp;
   }
+
+  return blockIdx;
 }
 
 /**
  * Построить HTML-размещение слов на diff-слое для одной страницы одной панели.
+ *
+ * blockIdx — сквозной итератор по глобальному массиву блоков diffResult.
+ * Он передаётся из applyDiffToPanel и возвращается обновлённым, чтобы
+ * не сбрасываться в 0 на каждой странице.
+ *
+ * Генерация HTML сохраняет CSS-классы .diff-word.delete / .diff-word.insert /
+ * .diff-word.equal, чтобы insertDiffSpacers мог находить селекторы
+ * `.diff-word.delete` и `.diff-word.insert`, а текст EQUAL оставался
+ * видимым (color: #111827 через .diff-word.equal).
+ *
+ * @param {number} pageNum - номер страницы (1-based)
+ * @param {string} panelKey - "A" или "B"
+ * @param {number} startBlockIdx - стартовый индекс блока (сквозной итератор)
+ * @returns {{html: string, blockIdx: number}} HTML-разметка и обновлённый blockIdx
  */
-function buildDiffWordsHtml(pageNum, panelKey) {
+function buildDiffWordsHtml(pageNum, panelKey, startBlockIdx = 0) {
   const coords = panelKey === "A" ? state.coordsLeft : state.coordsRight;
   const blocks = panelKey === "A"
     ? state.diffResult.left_panel.blocks
     : state.diffResult.right_panel.blocks;
 
   const pageInfo = coords.pages.find((p) => p.page_number === pageNum);
-  if (!pageInfo) return "";
+  if (!pageInfo) return { html: "", blockIdx: startBlockIdx };
 
-  const pageText = pageInfo.text;
   const words = pageInfo.words.slice(); // копия, чтобы не мутировать исходное
   // computeWordOffsets больше не нужен: глобальные индексы уже есть в словах
   // из ответа бэкенда (global_char_start / global_char_end).
-  mapWordsToOps(words, blocks);
+  const endBlockIdx = mapWordsToOps(words, blocks, startBlockIdx);
 
   const vp = state.renderedPagesA.get(pageNum) ||
              state.renderedPagesB.get(pageNum);
-  if (!vp) return "";
+  if (!vp) return { html: "", blockIdx: endBlockIdx };
 
   const scaleX = vp.viewport.width / 1; // scale=1 => 1:1 пойнт→пиксель
   const scaleY = vp.viewport.height / 1;
@@ -279,7 +305,7 @@ function buildDiffWordsHtml(pageNum, panelKey) {
     const escaped = escapeHtml(w.word);
     html += `<span class="${cls}" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px" title="${escapeHtml(w.op)}">${escaped}</span>`;
   }
-  return html;
+  return { html, blockIdx: endBlockIdx };
 }
 
 function escapeHtml(text) {
@@ -295,11 +321,24 @@ function applyDiffToPanel(panelKey) {
   const renderedMap = panelKey === "A" ? state.renderedPagesA : state.renderedPagesB;
   const container = document.getElementById(`canvasContainer${panelKey}`);
 
+  // Сквозной итератор по глобальному массиву блоков diffResult.
+  // Переносится между страницами — не сбрасывается в 0 в начале каждой.
+  let blockIdx = 0;
+
   // Проходим по всем page-wrap и наполняем их diff-слои
   container.querySelectorAll(".page-wrap").forEach((pageWrap) => {
     const pageNum = parseInt(pageWrap.dataset.pageNum, 10);
     const diffLayer = pageWrap.querySelector(".diff-layer");
-    diffLayer.innerHTML = buildDiffWordsHtml(pageNum, panelKey);
+
+    const { html, blockIdx: nextBlockIdx } = buildDiffWordsHtml(
+      pageNum,
+      panelKey,
+      blockIdx
+    );
+    diffLayer.innerHTML = html;
+
+    // Переносим обновлённый blockIdx на следующую страницу
+    blockIdx = nextBlockIdx;
   });
 }
 
