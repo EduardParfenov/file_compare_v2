@@ -100,3 +100,34 @@ uvicorn main:app --reload
 - статические файлы лежат в `static/`.
 
 Dockerfile, docker-compose и конфиги Nginx добавляются отдельно (позже).
+
+## Правила ветвления и Pull-Request (обязательно для всего проекта)
+
+**Не коммитить напрямую в `main`.** Ветка `main` защищена — вливание в неё возможно
+только через pull-request.
+
+1. **Каждое изменение — в новую ветку** от `main` (`feature/...`, `fix/...`,
+   `docs/...`, `chore/...`).
+2. **Pull-request обязателен** перед вливанием в `main`.
+3. **Вливание только после прохождения PR** (код-ревью и успешные проверки).
+4. **После вливания PR побочная ветка удаляется** (локально и на удалённом сервере).
+
+Пример рабочего процесса:
+
+```bash
+git checkout main
+git pull origin main
+git checkout -b feature/новая-задача
+# ... изменения ...
+git add -A
+git commit -m "Описание изменений"
+git push origin feature/новая-задача
+# Создать PR в main, пройти ревью и проверки, влить
+# После вливания:
+git checkout main
+git pull origin main
+git branch -d feature/новая-задача
+git push origin --delete feature/новая-задача
+```
+
+Подробные правила для агентов и разработчиков см. в `AGENTS.md`.
