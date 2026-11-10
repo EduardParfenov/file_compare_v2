@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>file-compare-v2 — гибридное сравнение PDF</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<!-- pdf.js (Mozilla) — рендер страниц PDF в <canvas> для визуальной подложки -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Fira+Code&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/static/styles.css" />
+<style>
+  /* pdf.js глобальный параметр: путь к работнику (worker) по CDN */
+  pdfjsLib.GlobalWorkerOptions.workerSrc =
+    "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+</style>
+</head>
+<body class="bg-gray-50 text-gray-900 h-screen overflow-hidden font-sans">
+
+  <!-- Шапка: загрузка файлов и управление -->
+  <header class="bg-white border-b border-gray-200 px-6 py-3 flex flex-col md:flex-row md:items-center gap-4 z-10">
+    <div class="flex flex-col md:flex-row items-center gap-4">
+      <label class="flex items-center gap-2 cursor-pointer bg-blue-600 text-white px-4 py-2 rounded-md font-medium hover:bg-blue-700 transition">
+        <span>Оригинал (PDF)</span>
+        <input type="file" id="fileA" accept="application/pdf" class="hidden" />
+      </label>
+      <label class="flex items-center gap-2 cursor-pointer bg-blue-600 text-white px-4 py-2 rounded-md font-medium hover:bg-blue-700 transition">
+        <span>Новая версия (PDF)</span>
+        <input type="file" id="fileB" accept="application/pdf" class="hidden" />
+      </label>
+      <button id="btnCompare" class="bg-green-600 text-white px-5 py-2 rounded-md font-medium hover:bg-green-700 transition disabled:opacity-50 disabled:cursor-not-allowed" disabled>
+        Сравнить документы
+      </button>
+    </div>
+    <div id="statusBar" class="text-xs text-gray-500 mt-2 md:mt-0 ml-0 md:ml-auto"></div>
+  </header>
+
+  <!-- Основная область: две панели сравнения + боковая панель ИИ -->
+  <main class="flex-1 overflow-hidden flex h-full">
+
+    <!-- Левая панель — оригинал -->
+    <section class="flex-1 min-w-0 flex flex-col border-r border-gray-200 bg-white relative">
+      <div class="px-3 py-2 bg-gray-100 border-b border-gray-200 text-xs font-semibold text-gray-700 uppercase tracking-wider">
+        Оригинал (исходная версия) &mdash; удаленные фрагменты подсвечены красным
+      </div>
+      <div id="panelA" class="flex-1 overflow-auto relative p-4 bg-white">
+        <div id="canvasContainerA" class="relative w-full h-full min-h-[600px]"></div>
+      </div>
+    </section>
+
+    <!-- Правая панель — измененная версия -->
+    <section class="flex-1 min-w-0 flex flex-col border-r border-gray-200 bg-white relative">
+      <div class="px-3 py-2 bg-gray-100 border-b border-gray-200 text-xs font-semibold text-gray-700 uppercase tracking-wider">
+        Новая версия &mdash; добавленные фрагменты подсвечены зеленым
+      </div>
+      <div id="panelB" class="flex-1 overflow-auto relative p-4 bg-white">
+        <div id="canvasContainerB" class="relative w-full h-full min-h-[600px]"></div>
+      </div>
+    </section>
+
+    <!-- Боковая панель ИИ-аналитики (сворачиваемая) -->
+    <aside id="aiPanel" class="w-80 bg-gray-900 text-gray-200 flex flex-col border-l border-gray-700 transform transition-transform duration-300">
+      <div class="flex items-center justify-between px-4 py-3 bg-gray-800 border-b border-gray-700 cursor-pointer hover:bg-gray-700 transition" onclick="toggleAiPanel()">
+        <span class="font-semibold flex items-center gap-2">🤖 AI Аналитика</span>
+        <span id="aiPanelToggle" class="text-gray-400">▲</span>
+      </div>
+      <div id="aiPanelContent" class="flex-1 overflow-y-auto p-4 space-y-4">
+        <div class="mb-3">
+          <label class="block text-xs font-medium text-gray-400 mb-1 uppercase tracking-wider">Системный промпт</label>
+          <textarea id="aiSystemPrompt" rows="4" class="w-full bg-gray-700 border border-gray-600 rounded p-2 text-xs text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none" placeholder="Вы be analyze..."></textarea>
+        </div>
+        <button id="btnAiAnalyze" class="w-full bg-blue-600 text-white px-4 py-2 rounded-md font-medium hover:bg-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed" disabled>
+          Запустить ИИ-анализ изменений
+        </button>
+        <div class="pt-2 border-t border-gray-700">
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-xs font-semibold text-gray-400 uppercase">ИИ-отчет по странице</span>
+            <button id="btnAiPageReport" class="text-xs bg-gray-700 hover:bg-gray-600 text-white px-3 py-1 rounded transition disabled:opacity-50" disabled>
+              Сгенерировать ИИ-отчет по странице
+            </button>
+          </div>
+          <p id="aiPageHint" class="text-xs text-gray-500 mb-2">Открыть страницу в одном из окон, затем нажать кнопку.</p>
+        </div>
+        <div id="aiOutput" class="bg-black/40 border border-gray-700 rounded p-3 min-h-[200px] text-sm font-mono text-gray-300 whitespace-pre-wrap break-words overflow-y-auto">
+          Здесь появится ИИ-разбор изменений (потоково).
+        </div>
+        <div id="aiError" class="hidden text-xs text-red-400 bg-red-900/20 border border-red-500/30 rounded p-2"></div>
+      </div>
+    </aside>
+
+  </main>
+
+  <template id="pageTemplate">
+    <div class="page-wrap mb-8 relative" data-page-num="0">
+      <canvas class="page-canvas max-w-full h-auto shadow-sm border border-gray-200 rounded-lg bg-white"></canvas>
+    </div>
+  </template>
+
+  <script type="module">
+    import { initApp } from "/static/app.js";
+    initApp();
+  </script>
+</body>
+</html>
