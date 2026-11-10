@@ -70,6 +70,7 @@ def extract_text_and_coords(pdf_path: str) -> dict:
 
     pages_data = []
     full_text_parts = []
+    global_char_offset = 0  # накопленное смещение символов от начала документа
 
     for page_index, page in enumerate(doc):
         page_number = page_index + 1
@@ -78,22 +79,40 @@ def extract_text_and_coords(pdf_path: str) -> dict:
         full_text_parts.append(text)
 
         # Координаты отдельных слов (для точного размещения diff-слоя)
+        # Каждое слово получает глобальные символьные индексы global_char_start /
+        # global_char_end — абсолютное смещение от начала документа сквозь все страницы.
         raw_words = page.get_text("words") or []
         words = []
+        page_char_offset = 0  # позиция внутри текста текущей страницы
         for entry in raw_words:
             # fitz возвращает (x0, y0, x1, y1, word, block, line, word_no)
+            word_text = entry[4]
+            # Ищем слово в тексте страницы, начиная с текущего позиции,
+            # чтобы корректно обрабатывать повторяющиеся слова.
+            idx = text.find(word_text, page_char_offset)
+            if idx == -1:
+                # слово не найдено — используем приблизительное смещение
+                idx = page_char_offset
+            global_char_start = global_char_offset + idx
+            global_char_end = global_char_start + len(word_text)
+            page_char_offset = idx + len(word_text)
             words.append(
                 {
                     "x0": float(entry[0]),
                     "y0": float(entry[1]),
                     "x1": float(entry[2]),
                     "y1": float(entry[3]),
-                    "word": entry[4],
+                    "word": word_text,
                     "block": int(entry[5]),
                     "line": int(entry[6]),
                     "word_no": int(entry[7]),
+                    "global_char_start": int(global_char_start),
+                    "global_char_end": int(global_char_end),
                 }
             )
+
+        # Сдвигаем глобальное смещение на длину текста страницы плюс разделитель "\n"
+        global_char_offset += len(text) + 1
 
         # Координаты текстовых блоков (для привязки скроллинга к якорям)
         raw_blocks = page.get_text("blocks") or []
@@ -158,9 +177,10 @@ def render_page_to_png(pdf_path: str, page_number: int) -> bytes:
         raise PdfHandlerError(f"Не удалось открыть PDF '{pdf_path}': {exc}") from exc
 
     if page_number < 1 or page_number > len(doc):
+        page_count = len(doc)
         doc.close()
         raise PdfHandlerError(
-            f"Страница {page_number} вне диапазона 1..{len(doc)} для '{pdf_path}'."
+            f"Страница {page_number} вне диапазона 1..{page_count} для '{pdf_path}'."
         )
 
     page = doc[page_number - 1]

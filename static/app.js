@@ -35,7 +35,7 @@ const state = {
 
 // -------------------- Инициализация --------------------
 
-function initApp() {
+export function initApp() {
   const fileA = document.getElementById("fileA");
   const fileB = document.getElementById("fileB");
   const btnCompare = document.getElementById("btnCompare");
@@ -83,7 +83,7 @@ async function comparePdfs(fileA, fileB) {
   formData.append("file_b", fileB);
 
   try {
-    btnCompare.disabled = true;
+    document.getElementById("btnCompare").disabled = true;
     statusBar.textContent = "Сравнение документов...";
 
     const response = await fetch(`${API_BASE}/api/v1/compare`, {
@@ -113,6 +113,9 @@ async function comparePdfs(fileA, fileB) {
     applyDiffToPanel("A");
     applyDiffToPanel("B");
 
+    // Вставляем спейсеры для синхронизации скроллинга противоположных окон
+    insertDiffSpacers();
+
     // Активируем ИИ-кнопки
     document.getElementById("btnAiAnalyze").disabled = false;
     document.getElementById("btnAiPageReport").disabled = false;
@@ -125,7 +128,7 @@ async function comparePdfs(fileA, fileB) {
     alert("Ошибка при сравнении: " + err.message);
     statusBar.textContent = "Ошибка при сравнении документов.";
   } finally {
-    btnCompare.disabled = !(fileA.files.length && fileB.files.length);
+    document.getElementById("btnCompare").disabled = !(document.getElementById("fileA").files.length && document.getElementById("fileB").files.length);
   }
 }
 
@@ -193,59 +196,55 @@ async function renderPage(pdfDoc, pageNum, container, panelKey, renderedMap) {
 // -------------------- Нанесение diff на панель --------------------
 
 /**
- * Вычислить символ-смещения каждого слова в тексте страницы,
- * чтобы сопоставить слова с координатами и операциями diff.
- */
-function computeWordOffsets(pageText, words) {
-  let offset = 0;
-  for (const w of words) {
-    const idx = pageText.indexOf(w.word, offset);
-    if (idx === -1) {
-      // слово не найдено — aproximативное смещение
-      w.start = offset;
-      w.end = offset + w.word.length;
-      offset = w.end;
-    } else {
-      w.start = idx;
-      w.end = idx + w.word.length;
-      offset = w.end;
-    }
-  }
-}
-
-/**
  * Сопоставить каждое слово с операцией diff (EQUAL/DELETE/INSERT),
- * пройдя по блокам diff в порядке следования.
+ * используя глобальные символьные индексы слов (global_char_start /
+ * global_char_end) и глобальные позиции блоков diff.
+ *
+ * Устраняет баг сброса blockIdx = 0 на каждой странице: слова
+ * сопоставляются сквозь все страницы документа, а не только на текущей.
+ *
+ * Блоки diff (left_panel.blocks / right_panel.blocks) идут в порядке
+ * документа. Слова на странице тоже идут по возрастанию global_char_start,
+ * поэтому один проход с двумя указателями достаточно.
  */
 function mapWordsToOps(words, blocks) {
   let blockIdx = 0;
-  let blockPos = 0; // позиция внутри текущего блока (в символах)
+  let blockGlobalStart = 0; // глобальная позиция начала текущего блока diff
+
   for (const w of words) {
-    const wordLen = w.word.length;
+    const wordGlobalStart = w.global_char_start;
+    const wordGlobalEnd = w.global_char_end;
     let wordOp = "EQUAL";
-    let consumed = 0;
 
-    while (consumed < wordLen && blockIdx < blocks.length) {
-      const block = blocks[blockIdx];
-      const blockText = block.text;
-      const remainingInBlock = blockText.length - blockPos;
-      const need = wordLen - consumed;
-      const take = Math.min(remainingInBlock, need);
+    // Пропускаем блоки, которые заканчиваются до начала слова.
+    // Указатель блока только двигается вперед — без сброса на каждой странице.
+    while (
+      blockIdx < blocks.length &&
+      blockGlobalStart + blocks[blockIdx].text.length <= wordGlobalStart
+    ) {
+      blockGlobalStart += blocks[blockIdx].text.length;
+      blockIdx++;
+    }
 
-      // Операция блока применяется к символам слова в этом диапазоне.
-      // Для слова берем операцию первого покрывающего его блока (приоритет DELETE/INSERT над EQUAL).
+    // Если блоки закончились — слово без изменений.
+    if (blockIdx >= blocks.length) {
+      w.op = "EQUAL";
+      continue;
+    }
+
+    // Проверяем все блоки, которые покрывают хоть часть слова.
+    // Приоритет отдаем не-EQUAL операции (DELETE/INSERT над EQUAL).
+    let probeIdx = blockIdx;
+    let probePos = blockGlobalStart;
+    while (probeIdx < blocks.length && probePos < wordGlobalEnd) {
+      const block = blocks[probeIdx];
       if (block.op !== "EQUAL") {
         wordOp = block.op;
       }
-
-      blockPos += take;
-      consumed += take;
-
-      if (blockPos >= blockText.length) {
-        blockIdx++;
-        blockPos = 0;
-      }
+      probePos += block.text.length;
+      probeIdx++;
     }
+
     w.op = wordOp;
   }
 }
@@ -264,7 +263,8 @@ function buildDiffWordsHtml(pageNum, panelKey) {
 
   const pageText = pageInfo.text;
   const words = pageInfo.words.slice(); // копия, чтобы не мутировать исходное
-  computeWordOffsets(pageText, words);
+  // computeWordOffsets больше не нужен: глобальные индексы уже есть в словах
+  // из ответа бэкенда (global_char_start / global_char_end).
   mapWordsToOps(words, blocks);
 
   const vp = state.renderedPagesA.get(pageNum) ||
@@ -306,6 +306,103 @@ function applyDiffToPanel(panelKey) {
     const diffLayer = pageWrap.querySelector(".diff-layer");
     diffLayer.innerHTML = buildDiffWordsHtml(pageNum, panelKey);
   });
+}
+
+/**
+ * Вставляет блоки-заглушки (spacer) в противоположное окно при крупных
+ * блоках вставки (INSERT) или удаления (DELETE), чтобы неизмененные
+ * абзацы оставались на одной горизонтальной линии.
+ *
+ * DELETE слева → спейсер справа (чтобы правое окно "замирало" на месте удаления).
+ * INSERT справа → спейсер слева (чтобы левое окно "замирало" на месте вставки).
+ */
+function insertDiffSpacers() {
+  const pageCount = Math.max(state.pageCountA, state.pageCountB);
+
+  for (let pageNum = 1; pageNum <= pageCount; pageNum++) {
+    const entryA = state.renderedPagesA.get(pageNum);
+    const entryB = state.renderedPagesB.get(pageNum);
+    if (!entryA || !entryB) continue;
+
+    const diffLayerA = entryA.pageWrap.querySelector(".diff-layer");
+    const diffLayerB = entryB.pageWrap.querySelector(".diff-layer");
+    if (!diffLayerA || !diffLayerB) continue;
+
+    // Удаляем старые спейсеры (для возможности повторного вызова)
+    diffLayerA.querySelectorAll(".diff-spacer").forEach((el) => el.remove());
+    diffLayerB.querySelectorAll(".diff-spacer").forEach((el) => el.remove());
+
+    // DELETE слева → спейсер справа
+    insertSpacersForOps(diffLayerA, diffLayerB, "delete");
+    // INSERT справа → спейсер слева
+    insertSpacersForOps(diffLayerB, diffLayerA, "insert");
+  }
+}
+
+/**
+ * Находит serie слов с заданным классом операции в sourceLayer и вставляет
+ * соответствующий спейсер в targetLayer на тех же вертикальных позициях.
+ *
+ * @param {HTMLElement} sourceLayer - diff-слой исходного окна (ищем слова операции)
+ * @param {HTMLElement} targetLayer - diff-слой противоположного окна (куда вставляем спейсер)
+ * @param {string} opClass - "delete" или "insert"
+ */
+function insertSpacersForOps(sourceLayer, targetLayer, opClass) {
+  const words = Array.from(sourceLayer.querySelectorAll(`.diff-word.${opClass}`));
+  if (words.length === 0) return;
+
+  // Группируем соседние слова в серии (runs) по вертикальной близости
+  const runs = [];
+  let currentRun = [words[0]];
+
+  for (let i = 1; i < words.length; i++) {
+    const prev = currentRun[currentRun.length - 1];
+    const curr = words[i];
+    const prevBottom = parseFloat(prev.style.top) + parseFloat(prev.style.height);
+    const currTop = parseFloat(curr.style.top);
+    // Если следующее слово идет сразу после предыдущего (зазор < 5 px) — одна серия
+    if (currTop - prevBottom < 5) {
+      currentRun.push(curr);
+    } else {
+      runs.push(currentRun);
+      currentRun = [curr];
+    }
+  }
+  runs.push(currentRun);
+
+  // Вставляем спейсер для каждой серии
+  for (const run of runs) {
+    insertSpacerForRun(targetLayer, run);
+  }
+}
+
+/**
+ * Вставляет один div.diff-spacer в targetLayer, охватывающий вертикальный
+ * диапазон заданной серии слов.
+ *
+ * @param {HTMLElement} targetLayer - diff-слой противоположного окна
+ * @param {Array<HTMLElement>} run - серия слов одной операции
+ */
+function insertSpacerForRun(targetLayer, run) {
+  if (run.length === 0) return;
+
+  const first = run[0];
+  const last = run[run.length - 1];
+  const top = parseFloat(first.style.top);
+  const bottom = parseFloat(last.style.top) + parseFloat(last.style.height);
+  const height = bottom - top;
+
+  const spacer = document.createElement("div");
+  spacer.className = "diff-spacer";
+  spacer.style.position = "absolute";
+  spacer.style.left = "0";
+  spacer.style.top = `${Math.round(top)}px`;
+  spacer.style.width = "100%";
+  spacer.style.height = `${Math.round(height)}px`;
+  spacer.style.pointerEvents = "none";
+  spacer.style.overflow = "visible";
+
+  targetLayer.appendChild(spacer);
 }
 
 // -------------------- Синхронный скроллинг (lock-step) --------------------
@@ -513,5 +610,3 @@ function nearestVisiblePage(panelKey) {
   }
   return nearest;
 }
-
-initApp();

@@ -75,6 +75,17 @@
   width: 100%;
 }
 
+/* Блок-заглушка для синхронизации скроллинга противоположного окна.
+   Вставляется на ту же вертикальную позицию, что и блок INSERT/DELETE
+   в другом окне, чтобы неизмененные абзацы оставались на одной линии. */
+.diff-spacer {
+  position: absolute;
+  left: 0;
+  width: 100%;
+  pointer-events: none;
+  overflow: visible;
+}
+
 /* Скрыть */
 .ui-hidden {
   display: none !important;
