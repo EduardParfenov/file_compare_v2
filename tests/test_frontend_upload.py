@@ -7,14 +7,48 @@
 - после выбора обоих файлов кнопка «Сравнить документы» становится активной;
 - нажатие «Сравнить документы» отправляет запрос на /api/v1/compare и получает 200.
 
-Требует установленных браузеров Playwright (`playwright install chromium`).
+Тест самодостаточен: приложение поднимается в фоновом потоке на свободном
+локальном порту, внешний сервер не требуется.
+
+Требует установленного браузера Playwright (`playwright install chromium`);
+если браузера нет — тест пропускается, а не падает.
 """
 
 from __future__ import annotations
 
+import socket
+import threading
+import time
+from pathlib import Path
+
 import fitz  # PyMuPDF
 import pytest
+import uvicorn
 from playwright.sync_api import sync_playwright
+
+from main import app
+
+
+def _free_port() -> int:
+    """Найти свободный TCP-порт для тестового сервера."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def _chromium_installed() -> bool:
+    """Проверить, установлен ли браузер Chromium для Playwright."""
+    try:
+        with sync_playwright() as p:
+            return Path(p.chromium.executable_path).exists()
+    except Exception:  # noqa: BLE001
+        return False
+
+
+pytestmark = pytest.mark.skipif(
+    not _chromium_installed(),
+    reason="Требуется браузер Playwright: playwright install chromium",
+)
 
 
 @pytest.fixture(scope="module")
@@ -33,8 +67,32 @@ def pdf_files(tmp_path_factory):
     return paths
 
 
-@pytest.fixture
-def browser_page():
+@pytest.fixture(scope="module")
+def live_server():
+    """Поднять приложение в фоновом потоке и вернуть его базовый URL."""
+    port = _free_port()
+    server_config = uvicorn.Config(
+        app, host="127.0.0.1", port=port, log_level="warning"
+    )
+    server = uvicorn.Server(server_config)
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+
+    deadline = time.time() + 15
+    while not server.started:
+        if time.time() > deadline:
+            server.should_exit = True
+            pytest.skip("Не удалось запустить тестовый сервер uvicorn")
+        time.sleep(0.05)
+
+    yield f"http://127.0.0.1:{port}"
+
+    server.should_exit = True
+    thread.join(timeout=5)
+
+
+@pytest.fixture(scope="module")
+def browser_page(live_server):
     """Запускает браузер, открывает страницу и возвращает (page, js_errors_with_stack)."""
     js_errors = []
     with sync_playwright() as p:
@@ -52,7 +110,7 @@ def browser_page():
         page.on("pageerror", on_page_error)
         page.on("console", on_console)
 
-        page.goto("http://127.0.0.1:8000/static/index.html")
+        page.goto(f"{live_server}/static/index.html")
         page.wait_for_timeout(2000)
 
         yield page, js_errors

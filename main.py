@@ -1,6 +1,7 @@
 """Точка входа FastAPI для гибридного сравнения двух версий PDF-документов.
 
 Маршруты:
+- GET  /                    — пользовательский интерфейс (static/index.html)
 - GET  /api/v1/health      — проверка работоспособности (без .env стартует)
 - POST /api/v1/compare     — прием двух PDF, извлечение текста и координат
                               (PyMuPDF), вычисление Git Split Diff
@@ -25,17 +26,22 @@ import json
 import os
 import shutil
 import tempfile
+from pathlib import Path
 from typing import AsyncIterator
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from config import settings
 from services.diff_engine import compute_diff_with_coords
 from services.pdf_handler import PdfHandlerError, extract_text_and_coords
 from services.vllm_client import VllmClientError, vllm_client
+
+#: Каталог статических файлов фронтенда — всегда рядом с main.py,
+#: независимо от текущего рабочего каталога процесса.
+STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 app = FastAPI(
     title="file-compare-v2",
@@ -53,8 +59,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Раздача статических файлов фронтенда (относительно корня проекта).
-app.mount("/static", StaticFiles(directory="static"), name="static")
+# Раздача статических файлов фронтенда (каталог определяется от __file__).
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+
+# --- Роут: корневой маршрут приложения ---
+
+
+@app.get("/", include_in_schema=False)
+async def index() -> FileResponse:
+    """Отдать пользовательский интерфейс приложения.
+
+    Тот же документ, что и статический файл `static/index.html`, — чтобы
+    приложение открывалось по корневому адресу без 404.
+    """
+    return FileResponse(STATIC_DIR / "index.html")
 
 
 # --- Вспомогательные функции ---
@@ -86,11 +105,14 @@ async def health() -> dict:
 
     Не требует доступности vLLM endpoint — используется для подтверждения
     старта приложения без .env (дефолтные значения).
+
+    Внутренний адрес эндпоинта ИИ-модели не раскрывается: вместо него
+    возвращается признак наличия настройки подключения.
     """
     return {
         "status": "ok",
-        "vllm_api_url": settings.VLLM_API_URL,
         "vllm_model": settings.VLLM_MODEL_NAME,
+        "vllm_configured": settings.vllm_configured,
     }
 
 
