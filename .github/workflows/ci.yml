@@ -1,0 +1,46 @@
+# CI file-compare-v2 — автоматическая проверка изменений.
+#
+# Запускается на каждый pull request и на каждый push в основную ветку.
+# Секреты не используются: набор тестов проходит на дефолтной конфигурации,
+# а ИИ-роуты проверяются моками.
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+# Минимальные права: workflow только читает код репозитория.
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    name: pytest
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Получить код
+        uses: actions/checkout@v4
+
+      - name: Подготовить Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Установить зависимости
+        # requirements-dev.txt подключает requirements.txt через -r
+        run: pip install -r requirements-dev.txt
+
+      - name: Установить браузер для end-to-end теста
+        # Без браузера тест фронтенда помечается как пропущенный,
+        # и проверка перестаёт охватывать реальный сценарий.
+        run: python -m playwright install --with-deps chromium
+
+      - name: Запустить тесты
+        run: pytest -q
