@@ -20,9 +20,9 @@
 
 ## 4. Зависимости
 
-- [ ] 4.1 Добавить `python-multipart` с зафиксированной версией в `requirements.txt`; перенести `pytest` из `requirements.txt` в новый `requirements-dev.txt`. Проверка: `pip install -r requirements.txt` в чистом окружении устанавливает `python-multipart`, а `pytest` в этот файл не входит.
-- [ ] 4.2 Сформировать `requirements-dev.txt` с `pytest` и `playwright` (зафиксированные версии) и указать в нём `-r requirements.txt`. Проверка: `pip install -r requirements-dev.txt` в чистом окружении устанавливает тестовые инструменты, и `pytest tests/` запускается.
-- [ ] 4.3 Проверить чистую установку по `requirements.txt`: в пустом виртуальном окружении `pip install -r requirements.txt`, затем запуск приложения и запрос `POST /api/v1/compare` с двумя PDF-файлами. Проверка: запрос возвращает 200 с `left_panel`/`right_panel`, а не 500 из-за отсутствующего `python-multipart`.
+- [x] 4.1 Добавить `python-multipart` с зафиксированной версией в `requirements.txt`; перенести `pytest` из `requirements.txt` в новый `requirements-dev.txt`. Проверка: `pip install -r requirements.txt` в чистом окружении устанавливает `python-multipart`, а `pytest` в этот файл не входит.
+- [x] 4.2 Сформировать `requirements-dev.txt` с `pytest` и `playwright` (зафиксированные версии) и указать в нём `-r requirements.txt`. Проверка: `pip install -r requirements-dev.txt` в чистом окружении устанавливает тестовые инструменты, и `pytest tests/` запускается.
+- [x] 4.3 Проверить чистую установку по `requirements.txt`: в пустом виртуальном окружении `pip install -r requirements.txt`, затем запуск приложения и запрос `POST /api/v1/compare` с двумя PDF-файлами. Проверка: запрос возвращает 200 с `left_panel`/`right_panel`, а не 500 из-за отсутствующего `python-multipart`.
 
 ## 5. Документация
 
