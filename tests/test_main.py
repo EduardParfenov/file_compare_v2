@@ -76,14 +76,40 @@ class _MockVllmClient:
 
 
 def test_health(client):
-    """GET /api/v1/health возвращает status: ok и данные конфигурации."""
+    """GET /api/v1/health возвращает status: ok и безопасные сведения о конфигурации."""
     response = client.get("/api/v1/health")
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "ok"
-    assert "vllm_api_url" in body
     assert "vllm_model" in body
     assert body["vllm_model"] == "qwen3-vl-8b"
+    assert isinstance(body["vllm_configured"], bool)
+    # Внутренний адрес эндпоинта ИИ-модели не раскрывается.
+    assert "vllm_api_url" not in body
+
+
+# ---------------------------------------------------------------------------
+# Тесты корневого маршрута и раздачи статики
+# ---------------------------------------------------------------------------
+
+
+def test_root_serves_user_interface(client):
+    """GET / отдаёт HTML-документ пользовательского интерфейса, а не 404."""
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "text/html" in response.headers["content-type"]
+    assert "<html" in response.text.lower()
+
+
+def test_static_and_root_work_from_any_working_directory(client, tmp_path, monkeypatch):
+    """Корневой маршрут и статика не зависят от текущего рабочего каталога."""
+    monkeypatch.chdir(tmp_path)
+
+    assert client.get("/").status_code == 200
+
+    static_response = client.get("/static/styles.css")
+    assert static_response.status_code == 200
+    assert "--diff-delete-bg" in static_response.text
 
 
 # ---------------------------------------------------------------------------
