@@ -1,7 +1,7 @@
 ## 1. Исправление lint-ошибок в исходном коде
 
 - [x] 1.1 Удалить неиспользуемый импорт `os` в `services/vllm_client.py` (F401) и убедиться, что `ruff check` на файле чист
-- [ ] 1.2 Удалить неиспользуемый импорт `pytest` в `tests/test_frontend_diff_mapping.py` (F401)
+- [x] 1.2 Удалить неиспользуемый импорт `pytest` в `tests/test_frontend_diff_mapping.py` (F401)
 - [x] 1.3 Удалить 6 неиспользуемых присваивания переменной `end_idx` в `tests/test_frontend_diff_mapping.py` (F841)
 - [x] 1.4 Удалить неиспользуемые импорты `types.SimpleNamespace`, `typing.AsyncIterator`, `pytest` в `tests/test_main.py` (F401)
 
