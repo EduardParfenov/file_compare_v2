@@ -13,7 +13,6 @@
 
 from __future__ import annotations
 
-import os
 from typing import AsyncIterator, Optional
 
 from openai import AsyncOpenAI

@@ -18,8 +18,6 @@ pytest.
 
 from __future__ import annotations
 
-import pytest
-
 
 # ---------------------------------------------------------------------------
 # Порт алгоритма mapWordsToOps на Python (аналогично static/app.js)
@@ -104,7 +102,7 @@ def test_map_words_to_ops_delete_highlighted():
     blocks = [
         {"op": "DELETE", "char_start": 0, "char_end": 7},
     ]
-    end_idx = map_words_to_ops(words, blocks, 0)
+    map_words_to_ops(words, blocks, 0)
     assert words[0]["op"] == "DELETE"
     assert diff_class(words[0]["op"]) == "diff-word delete"
 
@@ -117,7 +115,7 @@ def test_map_words_to_ops_insert_highlighted():
     blocks = [
         {"op": "INSERT", "char_start": 0, "char_end": 7},
     ]
-    end_idx = map_words_to_ops(words, blocks, 0)
+    map_words_to_ops(words, blocks, 0)
     assert words[0]["op"] == "INSERT"
     assert diff_class(words[0]["op"]) == "diff-word insert"
 
@@ -189,7 +187,7 @@ def test_intersection_partial_overlap_delete():
         {"op": "DELETE", "char_start": 8, "char_end": 12},
         {"op": "EQUAL", "char_start": 12, "char_end": 20},
     ]
-    end_idx = map_words_to_ops(words, blocks, 0)
+    map_words_to_ops(words, blocks, 0)
     assert words[0]["op"] == "DELETE"
     assert diff_class(words[0]["op"]) == "diff-word delete"
 
@@ -204,7 +202,7 @@ def test_intersection_partial_overlap_insert():
         {"op": "INSERT", "char_start": 8, "char_end": 12},
         {"op": "EQUAL", "char_start": 12, "char_end": 20},
     ]
-    end_idx = map_words_to_ops(words, blocks, 0)
+    map_words_to_ops(words, blocks, 0)
     assert words[0]["op"] == "INSERT"
     assert diff_class(words[0]["op"]) == "diff-word insert"
 
@@ -218,7 +216,7 @@ def test_delete_priority_over_equal():
         {"op": "EQUAL", "char_start": 0, "char_end": 10},
         {"op": "DELETE", "char_start": 8, "char_end": 12},
     ]
-    end_idx = map_words_to_ops(words, blocks, 0)
+    map_words_to_ops(words, blocks, 0)
     assert words[0]["op"] == "DELETE"
     assert diff_class(words[0]["op"]) == "diff-word delete"
 
@@ -231,7 +229,7 @@ def test_no_intersection_remains_equal():
     blocks = [
         {"op": "DELETE", "char_start": 0, "char_end": 10},
     ]
-    end_idx = map_words_to_ops(words, blocks, 0)
+    map_words_to_ops(words, blocks, 0)
     assert words[0]["op"] == "EQUAL"
     assert diff_class(words[0]["op"]) == "diff-word equal"
 
