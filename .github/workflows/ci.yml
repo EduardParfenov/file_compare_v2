@@ -38,18 +38,14 @@ jobs:
         run: pip install -r requirements-dev.txt
 
       - name: Проверить наличие OpenSpec CLI
-        # OpenSpec CLI (openspec) — системный инструмент для управления
-        # спецификациями и change'ами; не устанавливается через pip (пакет
-        # openspec на PyPI — другой проект). В данном окружении CLI уже
-        # доступен как /usr/local/bin/openspec (v1.12.0); на раннере GitHub
-        # Actions требуется отдельная установка (см. документацию OpenSpec).
-        # Этот шаг только информирует; отсутствие CLI проявится на шаге
-        # валидации спецификаций (openspec validate --specs --strict).
+        # OpenSpec CLI (openspec) — Node.js пакет @fission-ai/openspec.
+        # Устанавливается через npm перед валидацией спецификаций.
         run: |
           if command -v openspec >/dev/null 2>&1; then
             echo "OpenSpec CLI найден: $(openspec --version)"
           else
-            echo "Внимание: OpenSpec CLI не найден. Установите openspec согласно документации перед валидацией спецификаций." >&2
+            echo "Установка OpenSpec CLI через npm..."
+            npm install -g @fission-ai/openspec
           fi
 
       - name: Проверить стиль кода (линтер)
