@@ -139,9 +139,15 @@ Dockerfile, docker-compose и конфиги Nginx добавляются отд
 
 1. Устанавливает Python 3.11 и зависимости из `requirements-dev.txt`
    (файл подключает `requirements.txt`; кэш pip — по нему же).
-2. Устанавливает браузер Chromium для end-to-end теста фронтенда:
+2. Проверяет наличие OpenSpec CLI (системный инструмент управления
+   спецификациями; устанавливается отдельно на раннере).
+3. Запускает линтер и проверку форматирования кода Python (`ruff check`,
+   `ruff format --check`) — пункт P2.11b.
+4. Валидирует артефакты OpenSpec (`openspec validate --specs --strict`) —
+   пункт P2.14.
+5. Устанавливает браузер Chromium для end-to-end теста фронтенда:
    `playwright install --with-deps chromium`.
-3. Выполняет полный набор тестов командой `pytest`.
+6. Выполняет полный набор тестов командой `pytest`.
 
 Проверка **не требует секретов**: файла `.env` в окружении CI нет, адрес
 эндпоинта ИИ-модели не передаётся, ИИ-роуты проверяются моками. Набор тестов
@@ -157,6 +163,9 @@ Dockerfile, docker-compose и конфиги Nginx добавляются отд
 
 ```bash
 pip install -r requirements-dev.txt
+ruff check                      # линтер Python (P2.11b)
+ruff format --check             # проверка форматирования Python (P2.11b)
+openspec validate --specs --strict  # валидация артефактов OpenSpec (P2.14)
 python -m playwright install chromium   # нужен только для браузерного теста
 pytest
 ```

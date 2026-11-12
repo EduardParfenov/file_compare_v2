@@ -1,3 +1,5 @@
 -r requirements.txt
 pytest==8.4.2
 playwright==1.65.0
+# Линтер и форматтер для Python (task P2.11b): один инструмент на линтинг и форматирование.
+ruff==0.11.0
