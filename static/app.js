@@ -509,15 +509,157 @@ function scrollToPage(panelKey, pageNum) {
 
 // -------------------- ИИ-анализ (стриминг, SSE) --------------------
 
+/**
+ * Разобрать один SSE-кадр и передать его обработчикам.
+ *
+ * Поддерживаются именованные события SSE: кадр `event: error` — это ошибка,
+ * её текст передаётся в onError и в вывод не попадает. Кадры данных
+ * (событие по умолчанию `message`) разбираются как раньше: JSON-строка
+ * превращается в текст, не-JSON выводится как есть.
+ *
+ * @param {string} block - Текст кадра (строки кадра, разделённые \n)
+ * @param {{onChunk: Function, onError: Function}} handlers - Обработчики
+ */
+function handleSseBlock(block, { onChunk, onError }) {
+  const lines = block.split("\n");
+  const eventLine = lines.find((l) => l.startsWith("event:"));
+  const dataLines = lines.filter((l) => l.startsWith("data:"));
+
+  if (eventLine) {
+    const eventName = eventLine.slice("event:".length).trim();
+    if (eventName === "error") {
+      // Несколько data:-строк одного кадра соединяются переводом строки.
+      const rawData = dataLines
+        .map((l) => l.slice("data:".length).replace(/^ /, ""))
+        .join("\n");
+      let message = rawData;
+      try {
+        const payload = JSON.parse(rawData);
+        if (payload && typeof payload === "object" && "error" in payload) {
+          message = String(payload.error);
+        }
+      } catch (_) {
+        // Полезная нагрузка не JSON — показываем как есть.
+      }
+      onError(message || "Ошибка ИИ-модели");
+      return;
+    }
+  }
+
+  if (dataLines.length === 0) return;
+
+  const rawData = dataLines
+    .map((l) => l.slice("data:".length).replace(/^ /, ""))
+    .join("\n");
+
+  let chunk = rawData;
+  try {
+    chunk = JSON.parse(rawData);
+  } catch (_) {
+    // не JSON — выводим как есть
+  }
+  onChunk(typeof chunk === "string" ? chunk : String(chunk));
+}
+
+/**
+ * Прочитать поток SSE-ответа и передать фрагменты и ошибки обработчикам.
+ *
+ * Обрыв потока на уровне сети (соединение закрыто сервером или оборвано)
+ * тоже превращается в сообщение об ошибке — пользователь не должен видеть
+ * пустой вывод без объяснения причины.
+ *
+ * @param {Response} response - Ответ fetch с телом-потоком
+ * @param {{onChunk: Function, onError: Function}} handlers - Обработчики
+ */
+async function consumeSseStream(response, { onChunk, onError }) {
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder("utf-8");
+  let buffer = "";
+  let errorShown = false;
+
+  // Ошибку показываем пользователю один раз: конкретная причина (кадр
+  // `event: error`) важнее общего сообщения об обрыве соединения.
+  const reportError = (message) => {
+    if (errorShown) return;
+    errorShown = true;
+    onError(message);
+  };
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      // Разбираем SSE-кадры (разделитель кадров — пустая строка).
+      // Поддерживаются и \n\n, и \r\n\r\n — некоторые прокси нормализуют
+      // переводы строк.
+      let match;
+      while ((match = buffer.match(/\r?\n\r?\n/)) !== null) {
+        const block = buffer.slice(0, match.index);
+        buffer = buffer.slice(match.index + match[0].length);
+        handleSseBlock(block, { onChunk, onError: reportError });
+      }
+    }
+
+    // Хвост буфера без разделителя — незавершённый кадр, его отбрасываем
+    // (неполный JSON не должен попасть в вывод).
+    buffer += decoder.decode();
+  } catch (err) {
+    console.error(err);
+    reportError("Соединение прервано: поток ответа оборван до завершения.");
+  }
+}
+
+/**
+ * Показать сообщение об ошибке в панели ИИ-аналитики.
+ *
+ * @param {string} message - Текст ошибки
+ */
+function showAiError(message) {
+  const aiError = document.getElementById("aiError");
+  aiError.textContent = message;
+  aiError.classList.remove("ui-hidden");
+}
+
+/**
+ * Скрыть сообщение об ошибке в панели ИИ-аналитики.
+ */
+function hideAiError() {
+  const aiError = document.getElementById("aiError");
+  aiError.textContent = "";
+  aiError.classList.add("ui-hidden");
+}
+
+/**
+ * Извлечь текст ошибки из ответа API.
+ *
+ * `detail` FastAPI может быть не строкой (например, массивом объектов
+ * валидации) — тогда показываем его в читаемом виде.
+ *
+ * @param {Response} response - Ответ fetch
+ * @returns {Promise<string>} Текст ошибки для пользователя
+ */
+async function readApiError(response) {
+  const err = await response.json().catch(() => ({}));
+  if (typeof err.detail === "string" && err.detail) return err.detail;
+  if (err.detail) {
+    try {
+      return JSON.stringify(err.detail);
+    } catch (_) {
+      return `Ошибка ${response.status}`;
+    }
+  }
+  return `Ошибка ${response.status}`;
+}
+
 async function runAiAnalysis() {
   const systemPrompt = document.getElementById("aiSystemPrompt").value ||
     "Проанализируй изменения между двумя версиями PDF-документа. Опиши, что было удалено, что добавлено и какие значения это имеет для смысла документа. Пиши по-русски, кратко и по существу.";
-  const aiOutput = document.getElementById("aiOutput");
-  const aiError = document.getElementById("aiError");
   const btn = document.getElementById("btnAiAnalyze");
 
-  aiOutput.textContent = "";
-  aiError.classList.add("ui-hidden");
+  document.getElementById("aiOutput").textContent = "";
+  hideAiError();
   btn.disabled = true;
 
   try {
@@ -528,39 +670,16 @@ async function runAiAnalysis() {
     });
 
     if (!response.ok) {
-      throw new Error(`Ошибка ${response.status}`);
+      throw new Error(await readApiError(response));
     }
 
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder("utf-8");
-    let buffer = "";
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-
-      // Разбираем SSE-сообщения (data: ...\n\n)
-      let newlineIdx;
-      while ((newlineIdx = buffer.indexOf("\n\n")) !== -1) {
-        const block = buffer.slice(0, newlineIdx);
-        buffer = buffer.slice(newlineIdx + 2);
-        const dataLine = block.split("\n").find((l) => l.startsWith("data: "));
-        if (dataLine) {
-          try {
-            const chunk = JSON.parse(dataLine.slice(6));
-            appendAiChunk(chunk);
-          } catch (_) {
-            // не JSON — выводим как есть
-            appendAiChunk(dataLine.slice(6));
-          }
-        }
-      }
-    }
+    await consumeSseStream(response, {
+      onChunk: (text) => appendAiChunk(text),
+      onError: (message) => showAiError(message),
+    });
   } catch (err) {
     console.error(err);
-    aiError.textContent = "Ошибка ИИ-анализа: " + err.message;
-    aiError.classList.remove("ui-hidden");
+    showAiError("Ошибка ИИ-анализа: " + err.message);
   } finally {
     btn.disabled = false;
   }
@@ -578,14 +697,12 @@ function appendAiChunk(text) {
 // -------------------- ИИ-отчет по странице --------------------
 
 async function generateAiPageReport() {
-  const aiOutput = document.getElementById("aiOutput");
-  const aiError = document.getElementById("aiError");
   const btn = document.getElementById("btnAiPageReport");
   const systemPrompt = document.getElementById("aiSystemPrompt").value ||
     "Проанализируй изображение страницы PDF с учетом визуального контекста: таблиц, сдвигов верстки, логотипов и шрифтов. Опиши, что изменилось на этой странице между версиями документа. Пиши по-русски.";
 
-  aiOutput.textContent = "";
-  aiError.classList.add("ui-hidden");
+  document.getElementById("aiOutput").textContent = "";
+  hideAiError();
   btn.disabled = true;
 
   try {
@@ -609,37 +726,16 @@ async function generateAiPageReport() {
     });
 
     if (!response.ok) {
-      throw new Error(`Ошибка ${response.status}`);
+      throw new Error(await readApiError(response));
     }
 
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder("utf-8");
-    let buffer = "";
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-
-      let newlineIdx;
-      while ((newlineIdx = buffer.indexOf("\n\n")) !== -1) {
-        const block = buffer.slice(0, newlineIdx);
-        buffer = buffer.slice(newlineIdx + 2);
-        const dataLine = block.split("\n").find((l) => l.startsWith("data: "));
-        if (dataLine) {
-          try {
-            const chunk = JSON.parse(dataLine.slice(6));
-            appendAiChunk(chunk);
-          } catch (_) {
-            appendAiChunk(dataLine.slice(6));
-          }
-        }
-      }
-    }
+    await consumeSseStream(response, {
+      onChunk: (text) => appendAiChunk(text),
+      onError: (message) => showAiError(message),
+    });
   } catch (err) {
     console.error(err);
-    aiError.textContent = "Ошибка отчета по странице: " + err.message;
-    aiError.classList.remove("ui-hidden");
+    showAiError("Ошибка отчета по странице: " + err.message);
   } finally {
     btn.disabled = false;
   }

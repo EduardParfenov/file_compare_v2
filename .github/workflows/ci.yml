@@ -49,8 +49,8 @@ jobs:
           fi
 
       - name: Проверить стиль кода (линтер)
-        # ruff — линтер для Python (P2.11b). ruff.toml содержит временные
-        # per-file-ignores для файлов с pre-existing нарушениями (см. ruff.toml).
+        # ruff — линтер для Python (P2.11b). ruff.toml задаёт target-version
+        # (проект работает на Python 3.11) и общие настройки линтера.
         run: ruff check
 
       - name: Валидировать артефакты OpenSpec
