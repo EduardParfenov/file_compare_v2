@@ -1,9 +1,1 @@
 [lint]
-# Временные исключения для pre-existing нарушений стиля в существующем коде.
-# Эти файлы будут приведены в порядок в отдельной итерации очистки кода
-# (см. backlog.md P2.11b — линтеры/форматтеры — отдельная задача).
-# Исключения снимаются, как только соответствующие файлы очищены.
-[lint.per-file-ignores]
-"services/vllm_client.py" = ["F401"]      # unused import `os`
-"tests/test_frontend_diff_mapping.py" = ["F401", "F841"]  # unused import `pytest`, unused var `end_idx`
-"tests/test_main.py" = ["F401"]           # unused imports `types.SimpleNamespace`, `typing.AsyncIterator`, `pytest`

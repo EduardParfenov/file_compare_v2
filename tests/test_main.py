@@ -11,10 +11,6 @@
 from __future__ import annotations
 
 import base64
-from types import SimpleNamespace
-from typing import AsyncIterator
-
-import pytest
 
 from services.vllm_client import VllmClientError
 
