@@ -13,11 +13,71 @@
 
 from __future__ import annotations
 
+import logging
 from typing import AsyncIterator, Optional
+from urllib.parse import urlsplit
 
-from openai import AsyncOpenAI
+from openai import APIConnectionError, APIStatusError, APITimeoutError, AsyncOpenAI
 
 from config import settings
+
+logger = logging.getLogger(__name__)
+
+#: Минимальная длина ключа, начиная с которой его маскирование в тексте
+#: ошибки имеет смысл: короткие значения встречаются в обычных словах.
+_MIN_SECRET_LENGTH = 8
+
+
+def sanitize_error_text(text: str, *, api_url: str = "", api_key: str = "") -> str:
+    """Убрать из текста ошибки внутренние сведения: адрес эндпоинта и ключ.
+
+    Адрес эндпоинта ИИ-модели и ключ доступа — сведения о внутренней
+    инфраструктуре, пользователю их показывать нельзя (тем же принципом
+    пользуется ответ `GET /api/v1/health`). Маскируются все распространённые
+    формы адреса: полный URL, `host:port` и имя хоста. Подробности ошибки
+    остаются в серверном логе.
+
+    Args:
+        text: Исходный текст ошибки.
+        api_url: Внутренний адрес эндпоинта ИИ-модели.
+        api_key: Ключ доступа к эндпоинту.
+
+    Returns:
+        Текст ошибки без внутреннего адреса и ключа.
+    """
+    placeholder = "<внутренний эндпоинт ИИ-модели>"
+    if api_url:
+        text = text.replace(api_url, placeholder)
+        parts = urlsplit(api_url)
+        if parts.netloc:
+            text = text.replace(parts.netloc, placeholder)
+        if parts.hostname:
+            text = text.replace(parts.hostname, placeholder)
+    if api_key and len(api_key) >= _MIN_SECRET_LENGTH:
+        text = text.replace(api_key, "***")
+    return text
+
+
+def describe_error(exc: Exception) -> str:
+    """Коротко и безопасно описать сбой ИИ-модели для показа пользователю.
+
+    Исходный текст исключения не возвращается: он может содержать тело
+    ответа vLLM с внутренними путями, хостами и ключами. Подробности
+    ошибки фиксируются в серверном логе.
+
+    Args:
+        exc: Исходное исключение.
+
+    Returns:
+        Нейтральное описание причины сбоя.
+    """
+    if isinstance(exc, APITimeoutError):
+        return "ИИ-модель не ответила вовремя"
+    if isinstance(exc, APIConnectionError):
+        return "ИИ-модель недоступна (не удалось установить соединение)"
+    if isinstance(exc, APIStatusError):
+        return "ИИ-модель вернула ошибку"
+    return "Непредвиденная ошибка при обращении к ИИ-модели"
 
 
 class VllmClientError(Exception):
@@ -43,6 +103,27 @@ class VllmClient:
             base_url=self.api_url,
             api_key=self.api_key,
         )
+
+    def _user_error(self, context: str, exc: Exception) -> VllmClientError:
+        """Сформировать сообщение об ошибке, безопасное для показа пользователю.
+
+        Пользователю отдаётся только короткое описание причины: исходный
+        текст исключения может содержать тело ответа vLLM с внутренними
+        хостами, путями и ключами. Полные детали (включая адрес эндпоинта
+        и трассировку) остаются только в серверном логе.
+
+        Args:
+            context: Краткое описание операции ("потоковом анализе" и т.п.).
+            exc: Исходное исключение.
+
+        Returns:
+            Исключение `VllmClientError` с безопасным текстом сообщения.
+        """
+        logger.exception("Ошибка при %s через vLLM (%s)", context, self.api_url)
+        text = sanitize_error_text(
+            describe_error(exc), api_url=self.api_url, api_key=self.api_key
+        )
+        return VllmClientError(f"Ошибка при {context}: {text}")
 
     async def stream_analysis(
         self,
@@ -84,9 +165,7 @@ class VllmClient:
                 if content:
                     yield content
         except Exception as exc:  # noqa: BLE001
-            raise VllmClientError(
-                f"Ошибка при потоковом анализе через vLLM ({self.api_url}): {exc}"
-            ) from exc
+            raise self._user_error("потоковом анализе", exc) from exc
 
     async def stream_analysis_with_image(
         self,
@@ -140,9 +219,7 @@ class VllmClient:
                 if content:
                     yield content
         except Exception as exc:  # noqa: BLE001
-            raise VllmClientError(
-                f"Ошибка при потоковом визуальном анализе через vLLM ({self.api_url}): {exc}"
-            ) from exc
+            raise self._user_error("потоковом визуальном анализе", exc) from exc
 
 
 # Синглтон клиента (инициализируется из окружения при первом импорте).

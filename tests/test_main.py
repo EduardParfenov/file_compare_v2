@@ -1,16 +1,22 @@
 """Тесты для роутов API в `main.py`.
 
 Проверяются:
-- `GET /api/v1/health` — возвращает `status: ok`, `vllm_api_url`, `vllm_model`.
+- `GET /api/v1/health` — возвращает `status: ok`, `vllm_model`,
+  признак настройки подключения (без внутреннего адреса).
 - `POST /api/v1/compare` — с двумя тестовыми PDF возвращает
   `left_panel`/`right_panel`, координаты, `summary`.
 - ИИ-маршруты (`/api/v1/analyze`, `/api/v1/ai-report-page`) с мокированием vLLM:
   возврат 502 при недоступности vLLM, корректная работа при моке.
+
+Мок повторяет поведение настоящего клиента: методы — async-генераторы,
+поэтому ошибка возникает при итерации потока, а не при его создании
+(иначе тесты закрепляли бы ветку, недостижимую в production).
 """
 
 from __future__ import annotations
 
 import base64
+import json
 
 from services.vllm_client import VllmClientError
 
@@ -20,26 +26,11 @@ from services.vllm_client import VllmClientError
 # ---------------------------------------------------------------------------
 
 
-class _MockStream:
-    """Асинхронный итератор, отдающий заданные фрагменты строк."""
-
-    def __init__(self, chunks: list[str]):
-        self._chunks = chunks
-
-    def __aiter__(self) -> "_MockStream":
-        return self
-
-    async def __anext__(self) -> str:
-        if not self._chunks:
-            raise StopAsyncIteration
-        return self._chunks.pop(0)
-
-
 class _MockVllmClient:
     """Мок vllm_client с настраиваемым поведением.
 
-    Методы не являются async-функциями, а возвращают async-итератор напрямую,
-    чтобы код в main.py (`async for text in events`) работал корректно.
+    Методы — async-генераторы: ошибка `should_fail` возникает при итерации
+    потока, как при недоступном vLLM в реальном клиенте.
     """
 
     def __init__(self, should_fail: bool = False):
@@ -47,23 +38,25 @@ class _MockVllmClient:
         self.stream_analysis_called = False
         self.stream_analysis_with_image_called = False
 
-    def stream_analysis(self, prompt: str, **kwargs) -> _MockStream:
+    async def stream_analysis(self, prompt: str, **kwargs):
         self.stream_analysis_called = True
         if self.should_fail:
             raise VllmClientError("vLLM недоступен")
-        return _MockStream(["Часть 1 ответа ", "часть 2 ответа"])
+        yield "Часть 1 ответа "
+        yield "часть 2 ответа"
 
-    def stream_analysis_with_image(
+    async def stream_analysis_with_image(
         self,
         system_prompt: str,
         image_base64: str,
         image_mime_type: str = "image/png",
         **kwargs,
-    ) -> _MockStream:
+    ):
         self.stream_analysis_with_image_called = True
         if self.should_fail:
             raise VllmClientError("vLLM недоступен")
-        return _MockStream(["Анализ страницы ", "завершён"])
+        yield "Анализ страницы "
+        yield "завершён"
 
 
 # ---------------------------------------------------------------------------
@@ -140,11 +133,17 @@ def test_compare(client, pdf_a, pdf_b):
 
 
 def test_analyze_vllm_unavailable(monkeypatch, client):
-    """POST /api/v1/analyze возвращает 502, когда vLLM недоступен."""
+    """POST /api/v1/analyze возвращает 502, когда vLLM недоступен.
+
+    Сбой происходит при итерации потока (как в реальном клиенте) — маршрут
+    читает первый фрагмент до отправки заголовков, поэтому ошибка
+    представляется кодом ответа, а не оборванным потоком.
+    """
     mock = _MockVllmClient(should_fail=True)
     monkeypatch.setattr("main.vllm_client", mock)
     response = client.post("/api/v1/analyze", data={"prompt": "разбери изменения"})
     assert response.status_code == 502
+    assert mock.stream_analysis_called is True
 
 
 def test_analyze_vllm_mocked(monkeypatch, client):
@@ -155,6 +154,25 @@ def test_analyze_vllm_mocked(monkeypatch, client):
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
     assert mock.stream_analysis_called is True
+
+
+def test_analyze_stream_keeps_data_frame_format(monkeypatch, client):
+    """Формат кадров данных не изменился: `data: "<текст>"`."""
+    mock = _MockVllmClient(should_fail=False)
+    monkeypatch.setattr("main.vllm_client", mock)
+    response = client.post("/api/v1/analyze", data={"prompt": "разбери изменения"})
+    assert response.status_code == 200
+
+    chunks = [
+        line[len("data: "):]
+        for line in response.text.split("\n")
+        if line.startswith("data: ")
+    ]
+    assert [json.loads(chunk) for chunk in chunks] == [
+        "Часть 1 ответа ",
+        "часть 2 ответа",
+    ]
+    assert "event: error" not in response.text
 
 
 def test_ai_report_page_vllm_unavailable(monkeypatch, client):
@@ -168,6 +186,7 @@ def test_ai_report_page_vllm_unavailable(monkeypatch, client):
         data={"system_prompt": "проанализируй страницу"},
     )
     assert response.status_code == 502
+    assert mock.stream_analysis_with_image_called is True
 
 
 def test_ai_report_page_vllm_mocked(monkeypatch, client):
