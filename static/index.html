@@ -15,10 +15,10 @@
     "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
 </style>
 </head>
-<body class="bg-gray-50 text-gray-900 h-screen overflow-hidden font-sans">
+<body class="bg-gray-50 text-gray-900 h-screen overflow-hidden font-sans flex flex-col">
 
   <!-- Шапка: загрузка файлов и управление -->
-  <header class="bg-white border-b border-gray-200 px-6 py-3 flex flex-col md:flex-row md:items-center gap-4 z-10">
+  <header class="bg-white border-b border-gray-200 px-6 py-3 flex flex-col md:flex-row md:items-center gap-4 z-10 shrink-0">
     <div class="flex flex-col md:flex-row items-center gap-4">
       <label class="flex items-center gap-2 cursor-pointer bg-blue-600 text-white px-4 py-2 rounded-md font-medium hover:bg-blue-700 transition">
         <span>Оригинал (PDF)</span>
@@ -36,7 +36,10 @@
   </header>
 
   <!-- Основная область: две панели сравнения + боковая панель ИИ -->
-  <main class="flex-1 overflow-hidden flex h-full">
+  <!-- min-h-0 обязателен: flex-элемент по умолчанию не сжимается ниже
+       высоты своего содержимого, из-за чего прокручиваемое содержимое
+       распирало бы колонку и обрезалось overflow: hidden. -->
+  <main class="flex-1 min-h-0 overflow-hidden flex">
 
     <!-- Левая панель — оригинал -->
     <section class="flex-1 min-w-0 flex flex-col border-r border-gray-200 bg-white relative">
@@ -60,7 +63,7 @@
 
     <!-- Боковая панель ИИ-аналитики (сворачиваемая) -->
     <aside id="aiPanel" class="w-80 bg-gray-900 text-gray-200 flex flex-col border-l border-gray-700 transform transition-transform duration-300">
-      <div class="flex items-center justify-between px-4 py-3 bg-gray-800 border-b border-gray-700 cursor-pointer hover:bg-gray-700 transition" onclick="toggleAiPanel()">
+      <div id="aiPanelHeader" class="flex items-center justify-between px-4 py-3 bg-gray-800 border-b border-gray-700 cursor-pointer hover:bg-gray-700 transition">
         <span class="font-semibold flex items-center gap-2">🤖 AI Аналитика</span>
         <span id="aiPanelToggle" class="text-gray-400">▲</span>
       </div>
@@ -85,6 +88,7 @@
           Здесь появится ИИ-разбор изменений (потоково).
         </div>
         <div id="aiError" class="ui-hidden text-xs text-red-400 bg-red-900/20 border border-red-500/30 rounded p-2"></div>
+        <div id="aiEmpty" class="ui-hidden text-xs text-gray-300 bg-gray-700/40 border border-gray-600 rounded p-2"></div>
       </div>
     </aside>
 
