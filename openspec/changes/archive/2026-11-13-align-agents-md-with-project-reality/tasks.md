@@ -1,7 +1,7 @@
 ## 1. Подготовка ветки и базовых фактов
 
-- [ ] 1.1 Создать ветку `docs/align-agents-md-with-project-reality` от `main` (только после явного разрешения пользователя) и убедиться, что активна именно она: `git branch --show-current` выводит `docs/align-agents-md-with-project-reality`
-- [ ] 1.2 Зафиксировать базовые факты до правок: вывод `pytest --collect-only -q` (фактическое число тестов), `ruff check`, `ruff format --check`, `openspec validate --specs` — факты сохраняются в тексте pull request как точка отсчёта
+- [x] 1.1 Создать ветку `docs/align-agents-md-with-project-reality` от `main` (только после явного разрешения пользователя) и убедиться, что активна именно она: `git branch --show-current` выводит `docs/align-agents-md-with-project-reality`
+- [x] 1.2 Зафиксировать базовые факты до правок: вывод `pytest --collect-only -q` (фактическое число тестов), `ruff check`, `ruff format --check`, `openspec validate --specs` — факты сохраняются в тексте pull request как точка отсчёта
 
 ## 2. Правка AGENTS.md — устранение фактических ошибок
 
@@ -44,7 +44,25 @@
 ## 7. Приёмка и оформление pull request
 
 - [x] 7.1 Локальная проверка полного набора: `ruff check`, `ruff format --check`, `pytest`, `openspec validate --specs` — проверка: все команды завершаются успешно, вывод приложен к pull request
-- [ ] 7.2 Создать pull request в `main` из `docs/align-agents-md-with-project-reality` (только после явного разрешения пользователя) — проверка: получен идентификатор pull request, проверки запустились
-- [ ] 7.3 Подтвердить приёмку фактами GitHub (идентификатор pull request и зелёный статус проверок), затем закрыть задачи приёмки в `tasks.md` — проверка: факт приёмки зафиксирован в чек-листе до архивирования
-- [ ] 7.4 Заархивировать change `align-agents-md-with-project-reality` в том же pull request — проверка: change перенесён в `openspec/changes/archive/`, новая capability появилась в `openspec/specs/agent-governance/spec.md`
+- [x] 7.2 Создать pull request в `main` из `docs/align-agents-md-with-project-reality` (только после явного разрешения пользователя) — проверка: получен идентификатор pull request, проверки запустились
+- [x] 7.3 Подтвердить приёмку фактами GitHub (идентификатор pull request и зелёный статус проверок), затем закрыть задачи приёмки в `tasks.md` — проверка: факт приёмки зафиксирован в чек-листе до архивирования
+- [x] 7.4 Заархивировать change `align-agents-md-with-project-reality` в том же pull request — проверка: change перенесён в `openspec/changes/archive/`, новая capability появилась в `openspec/specs/agent-governance/spec.md`
 - [ ] 7.5 Слить pull request на GitHub и удалить рабочую ветку локально и на удалённом сервере — проверка: `main` содержит изменения, ветка `docs/align-agents-md-with-project-reality` отсутствует локально и на сервере
+
+## Факт приёмки (зафиксирован до архивирования)
+
+- **Pull request:** #14 — https://github.com/EduardParfenov/file_compare-v2/pull/14
+- **Прогон проверки:** GitHub Actions run 43374993463, job `pytest` — **pass** (1m14s)
+- **Локальные проверки перед PR:** `pytest` — 79 passed; `ruff check .` — All checks passed;
+  `ruff format --check tests/test_docs_consistency.py` — 1 file already formatted;
+  `openspec validate --specs --strict` — 4 passed, 0 failed;
+  `openspec validate align-agents-md-with-project-reality --type change --strict` — valid
+- **Базовые факты до правок (точка отсчёта):** `pytest --collect-only -q` — 75 tests collected;
+  `ruff check .` — All checks passed; `ruff format --check .` — 6 files would be reformatted;
+  `openspec validate --specs` — 4 passed, 0 failed
+- **Факты после правок:** `pytest --collect-only -q` — 79 tests collected; `pytest` — 79 passed;
+  `ruff check .` — All checks passed; `ruff format --check .` — те же 6 файлов (пре-существующий
+  долг, P2.15); `openspec validate --specs` и `--specs --strict` — 4 passed, 0 failed
+- **Негативный сценарий теста достоверности проверен:** при временном переименовании
+  `render_page_to_png` тест падает с сообщением «Документированные API отсутствуют в коде»,
+  после отката правки — проходит
