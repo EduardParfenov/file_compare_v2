@@ -166,3 +166,18 @@ PyMuPDF (`fitz`) при извлечении текста страницы (`pag
 ## Порядок попыток
 
 Попробовать Вариант Д → при неудаче Вариант Е → при неудаче Вариант Ж → при неудаче Вариант З (нормализация текста перед diff).
+
+---
+
+## Использовано в этой сессии
+
+### Использовано (в коде):
+1. **`services/pdf_handler.py`** — Вариант 3 (замена колонтитульных строк на пробелы той же длины через `_replace_service_lines_with_spaces`) и Вариант 5 (замена номеров страниц на пробелы той же длины через `_normalize_full_text`). Функция `extract_text_and_coords()` применяет сегментацию и нормализацию к `full_text`, собирает слова с корректными `global_char_start/end`.
+2. **`services/diff_engine.py`** — `diff_cleanupSemantic` после `diff_main()` для слияния смежных изменений.
+
+### Не использовано (созданы, но не интегрированы в `main.py`):
+1. **`services/extraction.py`** — `LineSpan` с привязкой к странице, bbox, `is_service`.
+2. **`services/segmentation.py`** — `detect_service_zones()` с кластеризацией Y, `MIN_PAGE_RATIO`, чёт/нечёт, эвристики коротких документов, `mark_service_lines()`.
+3. **`services/normalization.py`** — буфер diff только из `is_service=False`, склейка абзацев на стыке страниц, удаление номеров страниц на краях 8%, схлопывание пробелов, дестриховка.
+4. **`services/diffing.py`** — `DiffChange` с O(1)-маппингом в `LineSpan`, флаг `suspicious` для стыков страниц и краевых зон.
+5. **`services/pipeline.py`** — единый конвейер extraction → segmentation → normalization → diffing.
