@@ -111,8 +111,10 @@ def test_compare(client, pdf_a, pdf_b):
     with open(pdf_a, "rb") as f_a, open(pdf_b, "rb") as f_b:
         response = client.post(
             "/api/v1/compare",
-            files={"file_a": ("a.pdf", f_a, "application/pdf"),
-                   "file_b": ("b.pdf", f_b, "application/pdf")},
+            files={
+                "file_a": ("a.pdf", f_a, "application/pdf"),
+                "file_b": ("b.pdf", f_b, "application/pdf"),
+            },
         )
     assert response.status_code == 200
     body = response.json()
@@ -122,6 +124,7 @@ def test_compare(client, pdf_a, pdf_b):
     assert "coords_left" in body
     assert "coords_right" in body
     assert "summary" in body
+    assert "footer_diff" in body
     assert "meta" in body
     assert body["meta"]["file_a"] == "a.pdf"
     assert body["meta"]["file_b"] == "b.pdf"
@@ -164,7 +167,7 @@ def test_analyze_stream_keeps_data_frame_format(monkeypatch, client):
     assert response.status_code == 200
 
     chunks = [
-        line[len("data: "):]
+        line[len("data: ") :]
         for line in response.text.split("\n")
         if line.startswith("data: ")
     ]
@@ -179,7 +182,9 @@ def test_ai_report_page_vllm_unavailable(monkeypatch, client):
     """POST /api/v1/ai-report-page возвращает 502, когда vLLM недоступен."""
     mock = _MockVllmClient(should_fail=True)
     monkeypatch.setattr("main.vllm_client", mock)
-    image_bytes = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==")
+    image_bytes = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    )
     response = client.post(
         "/api/v1/ai-report-page",
         files={"image": ("page.png", image_bytes, "image/png")},
@@ -193,7 +198,9 @@ def test_ai_report_page_vllm_mocked(monkeypatch, client):
     """POST /api/v1/ai-report-page работает с mocked vLLM и возвращает SSE-поток."""
     mock = _MockVllmClient(should_fail=False)
     monkeypatch.setattr("main.vllm_client", mock)
-    image_bytes = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==")
+    image_bytes = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    )
     response = client.post(
         "/api/v1/ai-report-page",
         files={"image": ("page.png", image_bytes, "image/png")},

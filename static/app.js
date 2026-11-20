@@ -29,6 +29,7 @@ const state = {
   pageCountA: 0,
   pageCountB: 0,
   diffResult: null,
+  footerDiff: null,
   coordsLeft: null,
   coordsRight: null,
   renderedPagesA: new Map(), // pageNum -> {canvas, container, diffLayer}
@@ -112,6 +113,7 @@ async function comparePdfs(fileA, fileB) {
 
     const result = await response.json();
     state.diffResult = result;
+    state.footerDiff = result.footer_diff || null;
     state.coordsLeft = result.coords_left;
     state.coordsRight = result.coords_right;
     state.pageCountA = result.meta.page_count_a;
@@ -230,12 +232,19 @@ async function renderPage(pdfDoc, pageNum, container, panelKey, renderedMap) {
  *
  * Возвращает обновлённое значение blockIdx для передачи на следующую страницу.
  *
+ * Параметр otherDocText — основной текст другой версии (строка: все
+ * страницы, без колонтитулов). Слова, которые уже есть в другой версии,
+ * считаются перемещёнными, а не изменёнными: diff-метки DELETE/INSERT
+ * на них подавляются (операция остаётся EQUAL) — при переносе текста
+ * между страницами не должно быть ложных изменений.
+ *
  * @param {Array} words - слова страницы (с полями global_char_start, global_char_end, word)
  * @param {Array} blocks - блоки diff панели (с полями char_start, char_end, op)
  * @param {number} startBlockIdx - стартовый индекс блока (сквозной итератор)
+ * @param {string} otherDocText - основной текст другой версии ("" — нет информации)
  * @returns {number} обновлённый blockIdx
  */
-function mapWordsToOps(words, blocks, startBlockIdx = 0) {
+function mapWordsToOps(words, blocks, startBlockIdx = 0, otherDocText = "") {
   let blockIdx = startBlockIdx;
 
   for (const w of words) {
@@ -265,10 +274,40 @@ function mapWordsToOps(words, blocks, startBlockIdx = 0) {
       probeIdx++;
     }
 
+    // Перемещённый текст — не изменение: если текст слова есть в другой
+    // версии (в основном тексте другого документа), diff-метки на этом
+    // слове — артефакты перемещения между страницами, а не реальные
+    // изменения — и не подсвечиваем их.
+    if (
+      wordOp !== "EQUAL" &&
+      w.word &&
+      otherDocText &&
+      otherDocText.includes(w.word)
+    ) {
+      wordOp = "EQUAL";
+    }
+
     w.op = wordOp;
   }
 
   return blockIdx;
+}
+
+/**
+ * Вернуть основной текст другого документа (все его страницы, без колонтитулов).
+ *
+ * Для панели "A" другой документ — версия Б (state.coordsRight), для панели
+ * "B" — версия А (state.coordsLeft). Поле `text` страницы уже исключает
+ * колонтитулы (фильтруется бэкендом при извлечении).
+ *
+ * @param {string} panelKey - "A" или "B"
+ * @returns {string} Основной текст другой версии (конкатенация страниц).
+ */
+function otherDocText(panelKey) {
+  const otherPages = panelKey === "A" ? state.coordsRight : state.coordsLeft;
+  return (otherPages?.pages || [])
+    .map((p) => p.text || "")
+    .join("");
 }
 
 /**
@@ -300,7 +339,12 @@ function buildDiffWordsHtml(pageNum, panelKey, startBlockIdx = 0) {
   const words = pageInfo.words.slice(); // копия, чтобы не мутировать исходное
   // computeWordOffsets больше не нужен: глобальные индексы уже есть в словах
   // из ответа бэкенда (global_char_start / global_char_end).
-  const endBlockIdx = mapWordsToOps(words, blocks, startBlockIdx);
+  const endBlockIdx = mapWordsToOps(
+    words,
+    blocks,
+    startBlockIdx,
+    otherDocText(panelKey)
+  );
 
   const vp = state.renderedPagesA.get(pageNum) ||
              state.renderedPagesB.get(pageNum);

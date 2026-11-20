@@ -71,7 +71,9 @@ def test_env_file_values_override_defaults(tmp_path):
         encoding="utf-8",
     )
 
-    settings = config.Settings.from_env(config.read_environment(env_file=env_file, base={}))
+    settings = config.Settings.from_env(
+        config.read_environment(env_file=env_file, base={})
+    )
     assert settings.VLLM_API_URL == "http://dotenv:9000/v1"
     assert settings.VLLM_MODEL_NAME == "dotenv-model"
     assert settings.VLLM_API_KEY == "dotenv-key"
@@ -123,7 +125,9 @@ def test_env_file_path_points_to_project_root():
 
 def test_env_file_in_parent_directory_is_not_used(tmp_path):
     """`.env` из родительской директории не подхватывается (нет поиска вверх)."""
-    (tmp_path / ".env").write_text("VLLM_API_URL=http://parent:9000/v1\n", encoding="utf-8")
+    (tmp_path / ".env").write_text(
+        "VLLM_API_URL=http://parent:9000/v1\n", encoding="utf-8"
+    )
     subdir = tmp_path / "sub"
     subdir.mkdir()
 
@@ -191,4 +195,7 @@ def test_module_level_settings_expose_expected_fields():
 def test_vllm_configured_reflects_explicit_setting():
     """Признак настройки ИИ-контура верен только при явно заданном адресе."""
     assert config.Settings.from_env({}).vllm_configured is False
-    assert config.Settings.from_env({"VLLM_API_URL": "http://x/v1"}).vllm_configured is True
+    assert (
+        config.Settings.from_env({"VLLM_API_URL": "http://x/v1"}).vllm_configured
+        is True
+    )

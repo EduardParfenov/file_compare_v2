@@ -8,6 +8,8 @@
 - пересечение диапазонов слова и блока diff (`wStart < b.char_end &&
   wEnd > b.char_start`);
 - приоритет не-EQUAL операций (DELETE/INSERT над EQUAL);
+- подавление пометок для перемещённых слов (слово есть в другой версии —
+  считается не изменённым);
 - формирование CSS-классов `.diff-word.delete` / `.diff-word.insert` /
   `.diff-word.equal` для совместимости с `insertDiffSpacers`.
 
@@ -18,18 +20,27 @@ pytest.
 
 from __future__ import annotations
 
+import fitz
+
+from services.diff_engine import compute_diff
+from services.pdf_handler import extract_text_and_coords
+
 
 # ---------------------------------------------------------------------------
 # Порт алгоритма mapWordsToOps на Python (аналогично static/app.js)
 # ---------------------------------------------------------------------------
 
-def map_words_to_ops(words, blocks, start_block_idx=0):
+
+def map_words_to_ops(words, blocks, start_block_idx=0, other_doc_text=""):
     """Сопоставить каждое слово с операцией diff (порт JS-функции).
 
     Args:
         words: список словарей с полями global_char_start, global_char_end, word
         blocks: список словарей с полями char_start, char_end, op
         start_block_idx: стартовый индекс блока (сквозной итератор)
+        other_doc_text: основной текст другой версии (строка) — слова,
+            которые есть в другой версии, считаются перемещёнными
+            (не изменёнными) и их операции подавляются.
 
     Returns:
         (updated_words, end_block_idx) — слова с полем op и обновлённый blockIdx
@@ -59,6 +70,17 @@ def map_words_to_ops(words, blocks, start_block_idx=0):
                 word_op = block["op"]
             probe_idx += 1
 
+        # Перемещённый текст — не изменение: если текст слова есть в другой
+        # версии (в основном тексте другого документа), diff-метки на этом
+        # слове — артефакты перемещения между страницами, и не подсвечиваем их.
+        if (
+            word_op != "EQUAL"
+            and w["word"]
+            and other_doc_text
+            and w["word"] in other_doc_text
+        ):
+            word_op = "EQUAL"
+
         w["op"] = word_op
 
     return block_idx
@@ -76,6 +98,7 @@ def diff_class(op: str) -> str:
 # ---------------------------------------------------------------------------
 # Тесты
 # ---------------------------------------------------------------------------
+
 
 def test_map_words_to_ops_uses_backend_field_names():
     """Реальные имена полей бэкенда: global_char_start, global_char_end, word."""
@@ -258,6 +281,7 @@ def test_diff_class_equal_not_transparent():
 # Порт buildDiffWordsHtml из static/app.js (после hide-diff-text-layer)
 # ---------------------------------------------------------------------------
 
+
 def build_diff_words_html(words, blocks, start_block_idx=0):
     """Порт buildDiffWordsHtml (статику app.js) на Python для тестирования.
 
@@ -307,10 +331,19 @@ def build_diff_words_html(words, blocks, start_block_idx=0):
 # Тесты hide-diff-text-layer
 # ---------------------------------------------------------------------------
 
+
 def test_build_diff_words_html_equal_not_rendered():
     """EQUAL-слова не рендерятся на diff-слое (пустой HTML, текста нет)."""
     words = [
-        {"global_char_start": 0, "global_char_end": 5, "word": "Keep", "x0": 10, "y0": 20, "x1": 40, "y1": 30},
+        {
+            "global_char_start": 0,
+            "global_char_end": 5,
+            "word": "Keep",
+            "x0": 10,
+            "y0": 20,
+            "x1": 40,
+            "y1": 30,
+        },
     ]
     blocks = [
         {"op": "EQUAL", "char_start": 0, "char_end": 5},
@@ -323,7 +356,15 @@ def test_build_diff_words_html_equal_not_rendered():
 def test_build_diff_words_html_delete_rendered_without_text():
     """DELETE-слово рендерится как div с классом delete, без текстового contenuto."""
     words = [
-        {"global_char_start": 0, "global_char_end": 7, "word": "Removed", "x0": 10, "y0": 20, "x1": 60, "y1": 30},
+        {
+            "global_char_start": 0,
+            "global_char_end": 7,
+            "word": "Removed",
+            "x0": 10,
+            "y0": 20,
+            "x1": 60,
+            "y1": 30,
+        },
     ]
     blocks = [
         {"op": "DELETE", "char_start": 0, "char_end": 7},
@@ -341,7 +382,15 @@ def test_build_diff_words_html_delete_rendered_without_text():
 def test_build_diff_words_html_insert_rendered_without_text():
     """INSERT-слово рендерится как div с классом insert, без текстового contenuto."""
     words = [
-        {"global_char_start": 0, "global_char_end": 6, "word": "Added", "x0": 10, "y0": 20, "x1": 50, "y1": 30},
+        {
+            "global_char_start": 0,
+            "global_char_end": 6,
+            "word": "Added",
+            "x0": 10,
+            "y0": 20,
+            "x1": 50,
+            "y1": 30,
+        },
     ]
     blocks = [
         {"op": "INSERT", "char_start": 0, "char_end": 6},
@@ -356,9 +405,33 @@ def test_build_diff_words_html_insert_rendered_without_text():
 def test_build_diff_words_html_mixed_ops_no_text():
     """Смешанные операции: EQUAL пропускается, DELETE/INSERT рендерятся без текста."""
     words = [
-        {"global_char_start": 0, "global_char_end": 4, "word": "Keep", "x0": 0, "y0": 0, "x1": 20, "y1": 10},
-        {"global_char_start": 5, "global_char_end": 11, "word": "Removed", "x0": 25, "y0": 0, "x1": 60, "y1": 10},
-        {"global_char_start": 12, "global_char_end": 16, "word": "Add", "x0": 65, "y0": 0, "x1": 85, "y1": 10},
+        {
+            "global_char_start": 0,
+            "global_char_end": 4,
+            "word": "Keep",
+            "x0": 0,
+            "y0": 0,
+            "x1": 20,
+            "y1": 10,
+        },
+        {
+            "global_char_start": 5,
+            "global_char_end": 11,
+            "word": "Removed",
+            "x0": 25,
+            "y0": 0,
+            "x1": 60,
+            "y1": 10,
+        },
+        {
+            "global_char_start": 12,
+            "global_char_end": 16,
+            "word": "Add",
+            "x0": 65,
+            "y0": 0,
+            "x1": 85,
+            "y1": 10,
+        },
     ]
     blocks = [
         {"op": "EQUAL", "char_start": 0, "char_end": 4},
@@ -371,3 +444,107 @@ def test_build_diff_words_html_mixed_ops_no_text():
     assert "Add" not in html
     assert "diff-word delete" in html
     assert "diff-word insert" in html
+
+
+# ---------------------------------------------------------------------------
+# Тесты подавления перемещённого текста (параметр other_doc_text)
+# ---------------------------------------------------------------------------
+
+
+def test_moved_word_suppressed_when_present_in_other_doc():
+    """Перемещённое слово (DELETE-блок, есть в другой версии) — EQUAL."""
+    words = [{"global_char_start": 0, "global_char_end": 7, "word": "Moved"}]
+    blocks = [{"op": "DELETE", "char_start": 0, "char_end": 7}]
+    map_words_to_ops(words, blocks, 0, other_doc_text="Some text with Moved inside.")
+    assert words[0]["op"] == "EQUAL"
+
+
+def test_insert_word_suppressed_when_present_in_other_doc():
+    """Перемещённое слово (INSERT-блок, есть в другой версии) — EQUAL."""
+    words = [{"global_char_start": 0, "global_char_end": 5, "word": "Moved"}]
+    blocks = [{"op": "INSERT", "char_start": 0, "char_end": 5}]
+    map_words_to_ops(words, blocks, 0, other_doc_text="Some text with Moved inside.")
+    assert words[0]["op"] == "EQUAL"
+
+
+def test_deleted_word_not_suppressed_when_absent_in_other_doc():
+    """Неперемещённое удаление: слова нет в другой версии — DELETE остаётся."""
+    words = [{"global_char_start": 0, "global_char_end": 7, "word": "Removed"}]
+    blocks = [{"op": "DELETE", "char_start": 0, "char_end": 7}]
+    map_words_to_ops(words, blocks, 0, other_doc_text="Some other text.")
+    assert words[0]["op"] == "DELETE"
+
+
+def test_insert_word_not_suppressed_when_absent_in_other_doc():
+    """INSERT остаётся, если слова нет в другой версии."""
+    words = [{"global_char_start": 0, "global_char_end": 5, "word": "Added"}]
+    blocks = [{"op": "INSERT", "char_start": 0, "char_end": 5}]
+    map_words_to_ops(words, blocks, 0, other_doc_text="Some other text.")
+    assert words[0]["op"] == "INSERT"
+
+
+def test_no_other_doc_text_keeps_marking():
+    """Без other_doc_text поведение не меняется (marking работает как раньше)."""
+    words = [{"global_char_start": 0, "global_char_end": 7, "word": "Removed"}]
+    blocks = [{"op": "DELETE", "char_start": 0, "char_end": 7}]
+    map_words_to_ops(words, blocks, 0)
+    assert words[0]["op"] == "DELETE"
+
+
+# ---------------------------------------------------------------------------
+# Интеграционный тест: перенос текста между страницами — без ложных изменений
+# ---------------------------------------------------------------------------
+
+
+def _build_doc(path, pages):
+    """Создать синтетический PDF: список страниц, каждая — список строк."""
+    doc = fitz.open()
+    for lines in pages:
+        page = doc.new_page()
+        y = 72.0
+        for line in lines:
+            page.insert_text((72, y), line, fontsize=12)
+            y += 18.0
+    doc.save(str(path))
+    doc.close()
+
+
+def _panel_ops(pages, blocks, other_doc_text):
+    """Применить порт mapWordsToOps ко всем словам панели — множество op."""
+    ops = set()
+    block_idx = 0
+    for page in pages:
+        block_idx = map_words_to_ops(page["words"], blocks, block_idx, other_doc_text)
+        ops.update(w["op"] for w in page["words"])
+    return ops
+
+
+def test_moved_text_between_pages_not_highlighted(tmp_path):
+    """Перенос текста со стр. 2 на стр. 3: перемещённый текст не подсвечивается."""
+    moved = "Moved paragraph about work."
+    pages_a = [
+        ["Start of the document."],
+        ["Page two.", moved, "End of page two."],
+        ["Page three.", "Other line on page three."],
+    ]
+    pages_b = [
+        ["Start of the document."],
+        ["Page two.", "End of page two."],
+        ["Page three.", moved, "Other line on page three."],
+    ]
+    path_a = tmp_path / "a.pdf"
+    path_b = tmp_path / "b.pdf"
+    _build_doc(path_a, pages_a)
+    _build_doc(path_b, pages_b)
+
+    data_a = extract_text_and_coords(str(path_a))
+    data_b = extract_text_and_coords(str(path_b))
+    result = compute_diff(data_a["full_text"], data_b["full_text"])
+
+    other_b = "".join(p["text"] for p in data_b["pages"])
+    other_a = "".join(p["text"] for p in data_a["pages"])
+    left_ops = _panel_ops(data_a["pages"], result["left_panel"]["blocks"], other_b)
+    right_ops = _panel_ops(data_b["pages"], result["right_panel"]["blocks"], other_a)
+
+    assert left_ops <= {"EQUAL"}
+    assert right_ops <= {"EQUAL"}

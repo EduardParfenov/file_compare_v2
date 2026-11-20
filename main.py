@@ -6,7 +6,7 @@
 - POST /api/v1/compare     — прием двух PDF, извлечение текста и координат
                               (PyMuPDF), вычисление Git Split Diff
                               (diff-match-patch), возврат JSON для левой и
-                              правой панелей.
+                              правой панелей; колонтитулы сравниваются отдельно (поле footer_diff).
 - POST /api/v1/analyze     — потоковый ИИ-анализ изменений через vLLM
                               (SSE / StreamingResponse) в боковую панель.
 - POST /api/v1/ai-report-page — ИИ-отчет по странице: изображение + системный
@@ -37,7 +37,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from config import settings
-from services.diff_engine import compute_diff_with_coords
+from services.diff_engine import compute_diff, compute_diff_with_coords
 from services.pdf_handler import PdfHandlerError, extract_text_and_coords
 from services.vllm_client import VllmClientError, sanitize_error_text, vllm_client
 
@@ -240,6 +240,15 @@ async def compare(
         data_a = extract_text_and_coords(path_a)
         data_b = extract_text_and_coords(path_b)
 
+        # Колонтитулы сравниваются отдельно от основного текста.
+        footer_a = "\n".join(
+            p["footer_text"] for p in data_a["pages"] if p["footer_text"]
+        )
+        footer_b = "\n".join(
+            p["footer_text"] for p in data_b["pages"] if p["footer_text"]
+        )
+        footer_diff = compute_diff(footer_a, footer_b)
+
         # Вычисляем diff с привязкой к координатам.
         result = compute_diff_with_coords(
             text_a=data_a["full_text"],
@@ -256,6 +265,7 @@ async def compare(
                 "coords_left": result["coords_left"],
                 "coords_right": result["coords_right"],
                 "summary": result["summary"],
+                "footer_diff": footer_diff,
                 "meta": {
                     "file_a": file_a.filename,
                     "file_b": file_b.filename,
@@ -283,7 +293,9 @@ async def compare(
 
 @app.post("/api/v1/analyze")
 async def analyze(
-    prompt: str = Form(..., description="Системный + пользовательский промпт для анализа"),
+    prompt: str = Form(
+        ..., description="Системный + пользовательский промпт для анализа"
+    ),
 ) -> StreamingResponse:
     """Потоковый ИИ-анализ изменений через vLLM (SSE).
 
