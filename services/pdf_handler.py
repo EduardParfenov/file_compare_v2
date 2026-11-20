@@ -2,6 +2,9 @@
 
 Отвечает за:
 - извлечение плоского текста каждой страницы;
+- выделение колонтитулов (`footer_text` — текст в нижней полосе страницы,
+  см. `FOOTER_BAND`): они не участвуют в основном тексте и сравниваются
+  отдельно;
 - извлечение координат слов и текстовых блоков (X, Y, ширина, высота)
   через page.get_text("words") и page.get_text("blocks") для наложения
   прозрачного diff-слоя поверх виртуальной подложки страниц;
@@ -17,12 +20,23 @@ from __future__ import annotations
 import fitz  # PyMuPDF
 
 
+#: Высота полосы колонтитула (в пунктах) снизу страницы — текст в этой
+#: полосе считается колонтитулом: он выносится в ``footer_text`` и сравнивается
+#: отдельно от основного текста (см. `main.py` — ``footer_diff``).
+FOOTER_BAND: float = 40.0
+
+
 class PdfHandlerError(Exception):
     """Базовая ошибка обработки PDF."""
 
 
 def extract_text_and_coords(pdf_path: str) -> dict:
     """Извлечь текст и координаты всех элементов со страниц PDF.
+
+    Колонтитулы (текст в нижней полосе страницы — см. `FOOTER_BAND`)
+    выделяются в поле ``footer_text`` и не участвуют в основном тексте
+    (``text``, ``full_text``, ``words``); их сравнение выполняется
+    отдельно (``footer_diff`` в ответе `/api/v1/compare`).
 
     Args:
         pdf_path: Путь к PDF-файлу.
@@ -34,7 +48,8 @@ def extract_text_and_coords(pdf_path: str) -> dict:
             "pages": [
                 {
                     "page_number": int,      # 1-based
-                    "text": str,             # плоский текст страницы
+                    "text": str,             # плоский текст страницы (без колонтитулов)
+                    "footer_text": str,      # текст колонтитула страницы ("" — его нет)
                     "width": float,          # ширина страницы (pt)
                     "height": float,         # высота страницы (pt)
                     "words": [               # координаты отдельных слов
@@ -56,7 +71,7 @@ def extract_text_and_coords(pdf_path: str) -> dict:
                 },
                 ...
             ],
-            "full_text": str                 # конкатенация текста всех страниц
+            "full_text": str                 # конкатенация основного текста всех страниц
         }
 
     Raises:
@@ -75,13 +90,21 @@ def extract_text_and_coords(pdf_path: str) -> dict:
     for page_index, page in enumerate(doc):
         page_number = page_index + 1
         rect = page.rect
-        text = page.get_text("text") or ""
+        # Колонтитулы — текст в нижней полосе страницы (FOOTER_BAND):
+        # они выносятся в footer_text и не участвуют в основном тексте,
+        # чтобы изменения колонтитулов (например, нумерация страниц)
+        # не попадали в сравнение основного текста.
+        footer_top = max(0.0, rect.height - FOOTER_BAND)
+        main_clip = fitz.Rect(0, 0, rect.width, footer_top)
+        footer_clip = fitz.Rect(0, footer_top, rect.width, rect.height)
+        text = page.get_text("text", clip=main_clip) or ""
+        footer_text = page.get_text("text", clip=footer_clip) or ""
         full_text_parts.append(text)
 
         # Координаты отдельных слов (для точного размещения diff-слоя)
         # Каждое слово получает глобальные символьные индексы global_char_start /
         # global_char_end — абсолютное смещение от начала документа сквозь все страницы.
-        raw_words = page.get_text("words") or []
+        raw_words = page.get_text("words", clip=main_clip) or []
         words = []
         page_char_offset = 0  # позиция внутри текста текущей страницы
         for entry in raw_words:
@@ -135,6 +158,7 @@ def extract_text_and_coords(pdf_path: str) -> dict:
             {
                 "page_number": page_number,
                 "text": text,
+                "footer_text": footer_text,
                 "width": float(rect.width),
                 "height": float(rect.height),
                 "words": words,

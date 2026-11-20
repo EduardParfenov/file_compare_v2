@@ -5,11 +5,19 @@
   и блоков (X, Y, ширина, высота) через PyMuPDF;
 - структура результата (page_count, pages, full_text);
 - поля слов и блоков (x0, y0, x1, y1, global_char_start, global_char_end);
+- выделение колонтилов (`footer_text`): колонтильный текст не участвует
+  в основном тексте;
 - поведение при отсутствии текстового слоя (PdfHandlerError, не ложные совпадения);
 - `render_page_to_png` возвращает байты PNG.
 """
 
-from services.pdf_handler import PdfHandlerError, extract_text_and_coords, render_page_to_png
+import fitz
+
+from services.pdf_handler import (
+    PdfHandlerError,
+    extract_text_and_coords,
+    render_page_to_png,
+)
 
 
 def test_extract_text_and_coords_structure(pdf_a):
@@ -112,3 +120,28 @@ def test_render_page_to_png_invalid_page(pdf_a):
     except PdfHandlerError:
         return
     raise AssertionError("Ожидалась PdfHandlerError для несуществующей страницы")
+
+
+def test_footer_text_recognized_and_excluded_from_main_text(tmp_path):
+    """Колонтилы распознаются: footer_text не попадает в основной текст."""
+    path = tmp_path / "with_footer.pdf"
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_text((72, 72), "Main line one.", fontsize=12)
+    page.insert_text((72, page.rect.height - 20), "Footer text here.", fontsize=9)
+    doc.save(str(path))
+    doc.close()
+
+    data = extract_text_and_coords(str(path))
+    page_data = data["pages"][0]
+    assert "Footer text here." in page_data["footer_text"]
+    assert "Main line one." in page_data["text"]
+    assert "Footer text here." not in page_data["text"]
+    assert "Footer text here." not in data["full_text"]
+
+
+def test_no_footer_text_when_absent(pdf_a):
+    """Документ без колонтилов: footer_text пустой."""
+    data = extract_text_and_coords(pdf_a)
+    for page in data["pages"]:
+        assert page["footer_text"] == ""
